@@ -252,13 +252,14 @@ export default function Home() {
         }
 
         if (payload.type === "error" && typeof payload.message === "string") {
+          const errorMessage = payload.message;
           setMessages((current) =>
             current.map((message) =>
               message.id === assistantId
                 ? {
                     ...message,
                     error: true,
-                    content: message.content || payload.message,
+                    content: message.content || errorMessage,
                   }
                 : message,
             ),
