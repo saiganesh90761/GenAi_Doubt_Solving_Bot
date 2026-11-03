@@ -90,7 +90,7 @@ function friendlyError(error: unknown): { status: number; message: string } {
     if (error.status === 401 || error.status === 403) {
       return {
         status: 502,
-        message: "The tutor could not authenticate with the language model. Please try again later.",
+        message: "The tutor could not authenticate with OpenRouter. Please check that OPENROUTER_API_KEY in .env.local is valid.",
       };
     }
 

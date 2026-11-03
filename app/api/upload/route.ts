@@ -20,6 +20,13 @@ function friendlyEmbedError(error: unknown): { status: number; message: string }
   }
 
   if (error instanceof APIError) {
+    if (error.status === 401 || error.status === 403) {
+      return {
+        status: 502,
+        message: "Authentication failed with OpenRouter. Please verify that your OPENROUTER_API_KEY in .env.local is valid.",
+      };
+    }
+
     return {
       status: 502,
       message: "Could not embed this PDF. Please try again.",

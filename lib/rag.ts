@@ -74,10 +74,15 @@ export async function retrieve(
   extraChunks: IndexRecord[] = [],
   k = 5,
 ): Promise<RetrievedChunk[]> {
-  const queryEmbedding = await embedQuery(query);
   const corpus = [...loadIndex(), ...extraChunks].filter(
     (chunk) => chunk.embedding?.length,
   );
+
+  if (corpus.length === 0) {
+    return [];
+  }
+
+  const queryEmbedding = await embedQuery(query);
 
   return corpus
     .map((chunk) => ({
