@@ -147,6 +147,15 @@ export default function Home() {
   const [library, setLibrary] = useState<LibraryDoc[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [userChunks, setUserChunks] = useState<IndexRecord[]>([]);
+  const [sessionId] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    let id = sessionStorage.getItem("engineering_doubt_session_id");
+    if (!id) {
+      id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      sessionStorage.setItem("engineering_doubt_session_id", id);
+    }
+    return id;
+  });
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -208,6 +217,7 @@ export default function Home() {
         body: JSON.stringify({
           messages: history.map(({ role, content }) => ({ role, content })),
           userChunks,
+          sessionId: sessionId || undefined,
         }),
       });
 
@@ -302,6 +312,9 @@ export default function Home() {
       for (const file of files) {
         const body = new FormData();
         body.append("file", file);
+        if (sessionId) {
+          body.append("sessionId", sessionId);
+        }
         const response = await fetch("/api/upload", { method: "POST", body });
         const data = (await response.json()) as {
           error?: string;
@@ -343,6 +356,15 @@ export default function Home() {
   function removeUpload(name: string) {
     setUploadedFiles((current) => current.filter((item) => item.name !== name));
     setUserChunks((current) => current.filter((chunk) => chunk.file !== name));
+    if (sessionId) {
+      fetch("/api/upload", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: name, sessionId }),
+      }).catch((err) => {
+        console.warn("Could not delete from server:", err);
+      });
+    }
   }
 
   const sidebar = (

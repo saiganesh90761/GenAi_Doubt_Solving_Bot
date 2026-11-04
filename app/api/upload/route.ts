@@ -1,7 +1,8 @@
 import { APIError, RateLimitError } from "openai";
 import { extractPagesFromPdf, pagesToPendingChunks } from "@/lib/chunk";
 import { embedTexts } from "@/lib/embed";
-import type { IndexRecord } from "@/lib/types";
+import { upsertChunks, deleteChunksByDocument } from "@/lib/qdrant";
+import type { IndexRecord, VectorChunkPayload } from "@/lib/types";
 
 export const maxDuration = 60;
 
@@ -46,6 +47,8 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("file");
+  const sessionId = form.get("sessionId") as string | null;
+
   if (!(file instanceof File)) {
     return jsonError(400, "Choose a PDF file to upload.");
   }
@@ -82,11 +85,65 @@ export async function POST(request: Request) {
   const chunks: IndexRecord[] = pending.map((item, index) => ({
     ...item,
     embedding: embeddings[index],
+    documentId: file.name.replace(/[^a-zA-Z0-9_-]/g, "_"),
+    subject: "Student Upload",
+    documentType: "pdf",
+    ownerId: sessionId || null,
+    knowledgeScope: "private",
   }));
+
+  // Store chunks into Qdrant Cloud under private scope
+  try {
+    const qdrantPoints = chunks.map((c) => {
+      const payload: VectorChunkPayload = {
+        chunkId: c.id,
+        documentId: c.documentId || file.name,
+        documentName: c.file,
+        text: c.text,
+        page: c.page,
+        subject: "Student Upload",
+        documentType: "pdf",
+        ownerId: sessionId || null,
+        knowledgeScope: "private",
+        createdAt: Date.now(),
+      };
+      return {
+        id: c.id,
+        vector: c.embedding,
+        payload,
+      };
+    });
+
+    await upsertChunks(qdrantPoints);
+  } catch (error) {
+    console.warn("[Upload] Warning: Could not index chunks directly to Qdrant Cloud:", error);
+  }
 
   return Response.json({
     file: file.name,
     chunks,
+    chunkCount: chunks.length,
     emptyPages,
   });
+}
+
+export async function DELETE(request: Request) {
+  let body: { file?: string; sessionId?: string } | null = null;
+  try {
+    body = (await request.json()) as { file?: string; sessionId?: string };
+  } catch {
+    return jsonError(400, "Expected JSON body with { file, sessionId }");
+  }
+
+  if (!body?.file) {
+    return jsonError(400, "Missing 'file' parameter");
+  }
+
+  try {
+    await deleteChunksByDocument(body.file, body.sessionId || null);
+    return Response.json({ success: true, file: body.file });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to delete document chunks";
+    return jsonError(500, message);
+  }
 }

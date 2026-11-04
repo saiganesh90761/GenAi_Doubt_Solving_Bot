@@ -1,8 +1,23 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
+import { listIndexedDocuments } from "@/lib/qdrant";
 import { loadIndex } from "@/lib/rag";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const ownerId = searchParams.get("sessionId");
+
+  // 1. Try fetching from Qdrant Cloud
+  try {
+    const qdrantDocs = await listIndexedDocuments(ownerId);
+    if (qdrantDocs.length > 0) {
+      return Response.json({ documents: qdrantDocs });
+    }
+  } catch (error) {
+    console.warn("[Library API] Qdrant listing failed, checking local fallback:", error);
+  }
+
+  // 2. Fallback to local index and data/pdfs directory
   const index = loadIndex();
   const byFile = new Map<string, { pages: Set<number>; chunks: number }>();
 
@@ -32,6 +47,8 @@ export async function GET() {
       file,
       pages: info.pages.size,
       chunks: info.chunks,
+      subject: "General Engineering",
+      knowledgeScope: "global" as const,
     }))
     .sort((a, b) => a.file.localeCompare(b.file));
 

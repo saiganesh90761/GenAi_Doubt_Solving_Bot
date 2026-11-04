@@ -2,6 +2,7 @@ import { APIError, RateLimitError } from "openai";
 import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
 import { retrieve } from "@/lib/rag";
+import { config } from "@/lib/config";
 import type { IndexRecord } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -25,12 +26,14 @@ const chunkSchema = z.object({
 const bodySchema = z.object({
   messages: z.array(messageSchema).min(1),
   userChunks: z.array(chunkSchema).optional().default([]),
+  sessionId: z.string().optional(),
 });
 
 type Source = {
   file: string;
   page: number;
   snippet: string;
+  score?: number;
 };
 
 function snippetFrom(text: string, max = 240): string {
@@ -125,26 +128,31 @@ export async function POST(request: Request) {
 
   const parsed = bodySchema.safeParse(json);
   if (!parsed.success) {
-    return jsonError(400, "Send { messages, userChunks } with a non-empty messages array.");
+    return jsonError(400, "Send { messages } with a non-empty messages array.");
   }
 
-  const { messages, userChunks } = parsed.data;
+  const { messages, userChunks, sessionId } = parsed.data;
   const query = lastUserMessage(messages);
   if (!query) {
     return jsonError(400, "Please include a user message to answer.");
   }
 
-  const model = process.env.MODEL_NAME;
+  const model = config.models.chatModel;
   if (!model) {
     return jsonError(500, "The tutor is not configured yet (missing MODEL_NAME).");
   }
-  if (!process.env.OPENROUTER_API_KEY) {
+  if (!config.openrouter.apiKey) {
     return jsonError(500, "The tutor is not configured yet (missing OPENROUTER_API_KEY).");
   }
 
   let retrieved;
   try {
-    retrieved = await retrieve(query, userChunks as IndexRecord[], 5);
+    retrieved = await retrieve({
+      query,
+      ownerId: sessionId || null,
+      extraChunks: userChunks as IndexRecord[],
+      k: config.rag.defaultTopK,
+    });
   } catch (error) {
     const { status, message } = friendlyError(error);
     return jsonError(status, message);
@@ -154,6 +162,7 @@ export async function POST(request: Request) {
     file: chunk.file,
     page: chunk.page,
     snippet: snippetFrom(chunk.text),
+    score: chunk.score,
   }));
 
   let completion;

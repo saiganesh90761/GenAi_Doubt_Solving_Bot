@@ -2,19 +2,24 @@
 
 An AI-powered Retrieval-Augmented Generation (RAG) assistant designed for engineering students to resolve complex academic doubts with grounded answers, mathematical derivations, and verifiable textbook citations.
 
-Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, and **OpenRouter**.
+Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, **Qdrant Cloud**, and **OpenRouter**.
 
 ---
 
 ## ✨ Features
 
-- **📚 Retrieval-Augmented Generation (RAG)**: Answers are grounded in indexed engineering reference materials, minimizing hallucinations and ensuring academic accuracy.
+- **📚 Cloud-Native Vector Retrieval (Qdrant Cloud)**: High-speed, filtered similarity search matching both global academic textbooks and student-specific private uploads.
 - **📐 Mathematical & LaTeX Rendering**: Native rendering of equations, circuit formulas, beam bending derivations, and scientific notation via `KaTeX`, `remark-math`, and `rehype-katex`.
 - **⚡ Real-Time Streaming Responses**: Token streaming via Server-Sent Events (SSE) with progressive UI updates and markdown formatting.
-- **🔍 Verifiable Citations**: Expandable source drawer showing the exact file name, page number, and snippet used to answer each query.
-- **📄 On-the-Fly Personal PDF Uploads**: Upload personal course slides or notes directly in the browser; documents are parsed (`unpdf`), chunked, embedded, and queried in-session without requiring permanent database storage.
-- **🗂️ Pre-Indexed Corpus Management**: Built-in CLI ingestion pipeline (`npm run ingest`) that extracts, chunks, and pre-computes vector embeddings for reference textbooks into a portable JSON index.
-- **📱 Responsive UI**: Clean, accessible desktop and mobile design with dark/light mode compatibility and collapsible drawer.
+- **🔍 Verifiable Citations**: Expandable source drawer showing the exact file name, page number, snippet, and relevance score for every answer.
+- **📄 Dual Knowledge Scopes**:
+  - **Global Scope**: Persistent, admin-managed reference engineering textbooks and course syllabi.
+  - **Private Scope**: Session-scoped student PDF uploads indexed on-the-fly and isolated by `ownerId`.
+- **🗂️ CLI Ingestion & Migration Pipelines**:
+  - `npm run ingest`: Ingests textbooks from `data/pdfs/` into Qdrant Cloud with local backup.
+  - `npm run migrate`: Seamlessly migrates existing JSON indexes into Qdrant Cloud.
+  - `npm run test:rag`: End-to-end integration verification suite.
+- **📱 Responsive UI**: Clean desktop and mobile layout with dark/light mode compatibility.
 
 ---
 
@@ -25,11 +30,11 @@ Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, and **Ope
 | **Framework** | [Next.js 16](https://nextjs.org/) (App Router & Turbopack) |
 | **Language** | [TypeScript](https://www.typescriptlang.org/) |
 | **Styling** | [Tailwind CSS v4](https://tailwindcss.com/) |
-| **LLM & Embeddings** | [OpenRouter](https://openrouter.ai/) (OpenAI-compatible Chat & Embeddings API) |
+| **Vector Database** | [Qdrant Cloud](https://qdrant.tech/) (`@qdrant/js-client-rest`) |
+| **LLM & Embeddings** | [OpenRouter](https://openrouter.ai/) (NVIDIA Nemotron 3 Ultra + Nemotron 3 Embed 1B) |
 | **Document Processing**| [unpdf](https://github.com/unjs/unpdf) (Fast PDF text & page extraction) |
 | **Math & Markdown** | `react-markdown`, `remark-math`, `rehype-katex`, `katex` |
 | **Validation** | [Zod](https://zod.dev/) |
-| **Vector Retrieval** | In-memory cosine similarity over pre-computed embeddings |
 
 ---
 
@@ -39,13 +44,13 @@ Built with **Next.js (App Router)**, **TypeScript**, **Tailwind CSS**, and **Ope
 User Query / PDF Upload
          │
          ▼
-Next.js App Router (Client & Server Handlers)
-         ├── /api/upload ──> unpdf text extraction ──> OpenRouter Embedding ──> In-memory session chunks
+Next.js App Router (Client & Serverless Handlers)
+         ├── /api/upload ──> unpdf ──> OpenRouter Embedding ──> Qdrant Cloud (private scope)
          ├── /api/chat   ──> Query Embedding (OpenRouter)
          │                     │
          │                     ▼
-         │               Cosine Similarity Search
-         │               (data/index.json + User Chunks)
+         │               Qdrant Cloud Vector Search
+         │               Filter: global OR ownerId == sessionId
          │                     │
          │                     ▼
          │               Top-k Context + Academic Tutor Prompt
@@ -62,25 +67,29 @@ Next.js App Router (Client & Server Handlers)
 .
 ├── app/
 │   ├── api/
-│   │   ├── chat/route.ts      # Streaming RAG chat endpoint (OpenRouter)
-│   │   ├── library/route.ts   # Lists pre-loaded reference documents
-│   │   └── upload/route.ts    # Parses and embeds uploaded personal PDFs
+│   │   ├── chat/route.ts      # Streaming RAG chat endpoint (Qdrant + OpenRouter)
+│   │   ├── library/route.ts   # Lists reference documents from Qdrant Cloud
+│   │   └── upload/route.ts    # Parses, embeds, and indexes student PDFs into Qdrant
 │   ├── globals.css            # Tailwind CSS styling and theme setup
 │   ├── layout.tsx             # Root layout with fonts and KaTeX styles
 │   └── page.tsx               # Primary chat workspace, sidebar, & controls
 ├── data/
-│   ├── index.json             # Pre-computed chunk embeddings (generated)
+│   ├── index.json             # Local backup chunk embeddings
 │   └── pdfs/                  # Source engineering PDFs for ingestion
 │       └── .gitkeep
 ├── lib/
 │   ├── chunk.ts               # Text chunking (~800 chars / 150 overlap) & PDF parser
+│   ├── config.ts              # Centralized configuration (Qdrant, models, RAG thresholds)
 │   ├── embed.ts               # Batch embedding utility via OpenRouter
 │   ├── openrouter.ts          # Server-side OpenAI client for OpenRouter
-│   ├── rag.ts                 # Cosine similarity & vector retrieval logic
-│   └── types.ts               # TypeScript data contracts & interfaces
+│   ├── qdrant.ts              # Reusable Qdrant Cloud client, collection init, search & upsert
+│   ├── rag.ts                 # Vector retrieval with Qdrant + local fallback
+│   └── types.ts               # TypeScript data contracts (VectorChunkPayload, etc.)
 ├── public/                    # Static assets & icons
 ├── scripts/
-│   └── ingest.ts              # Offline pipeline: PDFs → chunks → embeddings
+│   ├── ingest.ts              # Ingest PDFs → chunks → embeddings → Qdrant Cloud
+│   ├── migrate.ts             # Migrates local index.json records to Qdrant Cloud
+│   └── test-rag.ts            # Verification test suite for Qdrant RAG pipeline
 ├── .env.example               # Example environment variables template
 ├── package.json
 └── tsconfig.json
@@ -93,120 +102,87 @@ Next.js App Router (Client & Server Handlers)
 ### Prerequisites
 
 - **Node.js**: v18.18+ or v20+ installed
-- **npm**, **pnpm**, or **yarn**
+- **npm** or **pnpm**
 - An **[OpenRouter](https://openrouter.ai/)** account and API key
+- A **[Qdrant Cloud](https://cloud.qdrant.io/)** cluster URL and API key
 
-### 1. Clone the Repository
+### 1. Configure Environment Variables
 
-```bash
-git clone https://github.com/saiganesh907/GenAI.git
-cd "Gen AI"
-```
-
-### 2. Install Dependencies
-
-```bash
-npm install
-```
-
-### 3. Configure Environment Variables
-
-Create a `.env.local` file by copying the example template:
+Create `.env.local` by copying the example template:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Open `.env.local` and provide your OpenRouter API key and preferred models:
+Fill in your credentials:
 
 ```env
-# OpenRouter API Key (Server-side only, never committed)
+# OpenRouter API Key
 OPENROUTER_API_KEY=your_openrouter_api_key_here
 
-# Chat Model ID on OpenRouter (e.g. Free Nemotron, Llama 3, Claude, etc.)
+# Chat Model ID on OpenRouter
 MODEL_NAME=nvidia/nemotron-3-ultra-550b-a55b:free
 
 # Embedding Model ID on OpenRouter
 EMBED_MODEL=nvidia/nemotron-3-embed-1b:free
+
+# Qdrant Cloud Vector Database
+QDRANT_URL=https://your-cluster-id.region.gcp.cloud.qdrant.io:6333
+QDRANT_API_KEY=your_qdrant_api_key_here
+QDRANT_COLLECTION=engineering_doubt_solver
 ```
 
-> 💡 **Tip:** Free models like `nvidia/nemotron-3-ultra-550b-a55b:free` and `nvidia/nemotron-3-embed-1b:free` work out-of-the-box on OpenRouter without incurring API charges.
+### 2. Verify Qdrant Cloud Setup
 
----
+Run the verification test suite:
 
-## 📖 Ingestion Pipeline (Adding Reference Materials)
+```bash
+npm run test:rag
+```
 
-To populate the assistant's permanent knowledge base with course textbooks, syllabi, or engineering reference PDFs:
+### 3. Add Reference Engineering Textbooks
 
-1. Drop your `.pdf` files into the `data/pdfs/` directory.
-2. Run the ingestion script:
+1. Drop `.pdf` textbooks or notes into `data/pdfs/`.
+2. Run the ingestion pipeline:
 
 ```bash
 npm run ingest
 ```
 
-The script will:
-- Parse text from each PDF page using `unpdf`.
-- Chunk text into standard segment lengths with overlap.
-- Embed the chunks in batches through OpenRouter.
-- Save the vector records into `data/index.json`.
-
-*(If no PDFs are provided, the system defaults to an empty base index and relies on runtime uploads and general engineering tutor knowledge).*
+The script will extract text, chunk it, embed it with OpenRouter, and upsert vectors directly to Qdrant Cloud under `knowledgeScope: "global"`.
 
 ---
 
 ## 💻 Running Locally
 
-### Development Server
-
-Start the local Next.js development server:
-
 ```bash
+# Start development server
 npm run dev
-```
 
-Navigate to [http://localhost:3000](http://localhost:3000) in your browser.
-
-### Type Checking & Linting
-
-```bash
 # Check TypeScript types
 npx tsc --noEmit
 
 # Run ESLint
 npm run lint
-```
 
-### Production Build
-
-```bash
-# Compile optimized production build
+# Build production bundle
 npm run build
-
-# Start production server
-npm start
 ```
 
 ---
 
 ## ☁️ Deployment (Vercel)
 
-The easiest way to deploy this application is using [Vercel](https://vercel.com/):
-
 1. Push your repository to GitHub.
-2. Import the project in Vercel.
-3. In the Vercel project settings, configure the **Environment Variables**:
+2. Import the repository in Vercel.
+3. Configure the environment variables in Vercel:
    - `OPENROUTER_API_KEY`
    - `MODEL_NAME`
    - `EMBED_MODEL`
-4. Deploy! The application uses standard Next.js App Router API routes compatible with Vercel Serverless Functions.
-
----
-
-## 🛡️ Security & Privacy
-
-- `OPENROUTER_API_KEY` is restricted strictly to server-side route handlers and is never sent to or bundled in client code.
-- Personal PDFs uploaded during a user session are embedded on the fly and retained in client component state for that session only.
+   - `QDRANT_URL`
+   - `QDRANT_API_KEY`
+   - `QDRANT_COLLECTION`
+4. Deploy!
 
 ---
 

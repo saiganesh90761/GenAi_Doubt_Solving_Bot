@@ -6,17 +6,11 @@ import {
   chunkText,
   extractPagesFromPdf,
 } from "../lib/chunk";
+import { upsertChunks, checkQdrantHealth } from "../lib/qdrant";
+import type { IndexRecord, VectorChunkPayload } from "../lib/types";
 
 const PDF_DIR = path.join(process.cwd(), "data", "pdfs");
 const INDEX_PATH = path.join(process.cwd(), "data", "index.json");
-
-type IndexRecord = {
-  id: string;
-  text: string;
-  file: string;
-  page: number;
-  embedding: number[];
-};
 
 function loadEnvFiles() {
   const fromShell = new Set(Object.keys(process.env));
@@ -132,6 +126,7 @@ async function main() {
   console.log(`Embedding ${pending.length} chunks with ${embedModel} (batch size ${EMBED_BATCH_SIZE})...`);
 
   const records: IndexRecord[] = [];
+  const qdrantPoints: Array<{ id: string; vector: number[]; payload: VectorChunkPayload }> = [];
 
   for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
     const batch = pending.slice(i, i + EMBED_BATCH_SIZE);
@@ -148,14 +143,49 @@ async function main() {
     }
 
     batch.forEach((item, index) => {
-      records.push({ ...item, embedding: embeddings[index] });
+      const vector = embeddings[index];
+      records.push({ ...item, embedding: vector });
+
+      const payload: VectorChunkPayload = {
+        chunkId: item.id,
+        documentId: item.file.replace(/[^a-zA-Z0-9_-]/g, "_"),
+        documentName: item.file,
+        text: item.text,
+        page: item.page,
+        subject: "General Engineering",
+        documentType: "pdf",
+        ownerId: null,
+        knowledgeScope: "global",
+        createdAt: Date.now(),
+      };
+
+      qdrantPoints.push({
+        id: item.id,
+        vector,
+        payload,
+      });
     });
 
     console.log(`  ${Math.min(i + EMBED_BATCH_SIZE, pending.length)}/${pending.length}`);
   }
 
+  // Backup to local file
   writeFileSync(INDEX_PATH, `${JSON.stringify(records, null, 2)}\n`, "utf8");
-  console.log(`Wrote ${records.length} records to ${INDEX_PATH}`);
+  console.log(`Wrote ${records.length} records to local backup ${INDEX_PATH}`);
+
+  // Sync to Qdrant Cloud
+  try {
+    const qHealth = await checkQdrantHealth();
+    if (qHealth.ok) {
+      console.log(`Syncing ${qdrantPoints.length} chunks to Qdrant Cloud...`);
+      const { upserted } = await upsertChunks(qdrantPoints);
+      console.log(`Successfully synced ${upserted} chunks to Qdrant Cloud!`);
+    } else {
+      console.warn(`Skipping Qdrant Cloud sync: ${qHealth.message}`);
+    }
+  } catch (error) {
+    console.error("Warning: Failed to sync to Qdrant Cloud:", error);
+  }
 }
 
 main().catch((error) => {

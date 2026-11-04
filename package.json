@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "ingest": "npx tsx scripts/ingest.ts"
+    "ingest": "npx tsx scripts/ingest.ts",
+    "migrate": "npx tsx scripts/migrate.ts",
+    "test:rag": "npx tsx scripts/test-rag.ts"
   },
   "dependencies": {
+    "@qdrant/js-client-rest": "^1.20.0",
     "ai": "^7.0.162",
     "katex": "^0.19.1",
     "next": "16.4.4",
