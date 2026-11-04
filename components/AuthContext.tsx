@@ -3,10 +3,20 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 
+export interface UserPreferences {
+  explanationDepth: "intuitive" | "standard" | "rigorous";
+  mathDetail: "concise" | "step_by_step" | "exhaustive";
+  theme: "dark" | "light" | "system";
+}
+
 export interface User {
   id: string;
   name: string;
   email: string;
+  institution?: string;
+  major?: string;
+  year?: string;
+  preferences?: UserPreferences;
 }
 
 interface AuthContextType {
@@ -14,13 +24,23 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  register: (name: string, email: string, password: string, institution?: string, major?: string) => Promise<void>;
   logout: () => void;
-  openAuth: (mode?: "login" | "register") => void;
+  resetPassword: (email: string) => Promise<void>;
+  updateProfile: (updates: { name?: string; institution?: string; major?: string; year?: string }) => Promise<void>;
+  updatePreferences: (preferences: Partial<UserPreferences>) => Promise<void>;
+  deleteAccount: () => Promise<void>;
+  openAuth: (mode?: "login" | "register" | "forgot") => void;
   closeAuth: () => void;
   authModalOpen: boolean;
-  authModalMode: "login" | "register";
+  authModalMode: "login" | "register" | "forgot";
 }
+
+const DEFAULT_PREFERENCES: UserPreferences = {
+  explanationDepth: "standard",
+  mathDetail: "step_by_step",
+  theme: "dark",
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -29,7 +49,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<"login" | "register">("login");
+  const [authModalMode, setAuthModalMode] = useState<"login" | "register" | "forgot">("login");
+
+  const buildUserFromSession = (u: { id: string; email?: string; user_metadata?: Record<string, unknown> }): User => {
+    const meta = u.user_metadata || {};
+    return {
+      id: u.id,
+      name: (meta.name as string) || (meta.full_name as string) || u.email?.split("@")[0] || "Student",
+      email: u.email || "",
+      institution: (meta.institution as string) || "Engineering Faculty",
+      major: (meta.major as string) || "General Engineering",
+      year: (meta.year as string) || "Undergraduate",
+      preferences: (meta.preferences as UserPreferences) || DEFAULT_PREFERENCES,
+    };
+  };
 
   // Sync Supabase Auth Session
   useEffect(() => {
@@ -40,12 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         if (!ignore && data.session?.user) {
-          const u = data.session.user;
-          setUser({
-            id: u.id,
-            name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
-            email: u.email || "",
-          });
+          setUser(buildUserFromSession(data.session.user));
           setToken(data.session.access_token);
         }
       } catch (err) {
@@ -61,12 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
-        const u = session.user;
-        setUser({
-          id: u.id,
-          name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
-          email: u.email || "",
-        });
+        setUser(buildUserFromSession(session.user));
         setToken(session.access_token);
       } else {
         setUser(null);
@@ -80,7 +103,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const openAuth = useCallback((mode: "login" | "register" = "login") => {
+  const openAuth = useCallback((mode: "login" | "register" | "forgot" = "login") => {
     setAuthModalMode(mode);
     setAuthModalOpen(true);
   }, []);
@@ -100,53 +123,99 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (data.session?.user) {
-      const u = data.session.user;
-      setUser({
-        id: u.id,
-        name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
-        email: u.email || "",
-      });
+      setUser(buildUserFromSession(data.session.user));
       setToken(data.session.access_token);
       setAuthModalOpen(false);
     }
   }, []);
 
-  const register = useCallback(async (name: string, email: string, password: string) => {
-    const cleanName = name.trim();
-    const cleanEmail = email.trim();
+  const register = useCallback(
+    async (name: string, email: string, password: string, institution?: string, major?: string) => {
+      const cleanName = name.trim();
+      const cleanEmail = email.trim();
 
-    const { data, error } = await supabase.auth.signUp({
-      email: cleanEmail,
-      password,
-      options: {
-        data: {
-          name: cleanName,
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            name: cleanName,
+            institution: institution?.trim() || "Engineering Faculty",
+            major: major?.trim() || "General Engineering",
+            preferences: DEFAULT_PREFERENCES,
+          },
         },
-      },
+      });
+
+      if (error) {
+        throw new Error(error.message || "Registration failed.");
+      }
+
+      if (data.session?.user) {
+        setUser(buildUserFromSession(data.session.user));
+        setToken(data.session.access_token);
+        setAuthModalOpen(false);
+      } else if (data.user) {
+        setUser(buildUserFromSession(data.user));
+        setAuthModalOpen(false);
+      }
+    },
+    [],
+  );
+
+  const resetPassword = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: typeof window !== "undefined" ? `${window.location.origin}/` : undefined,
     });
-
     if (error) {
-      throw new Error(error.message || "Registration failed.");
+      throw new Error(error.message || "Could not send password reset email.");
     }
+  }, []);
 
-    if (data.session?.user) {
-      const u = data.session.user;
-      setUser({
-        id: u.id,
-        name: cleanName || u.email?.split("@")[0] || "Student",
-        email: u.email || "",
+  const updateProfile = useCallback(
+    async (updates: { name?: string; institution?: string; major?: string; year?: string }) => {
+      const { data, error } = await supabase.auth.updateUser({
+        data: updates,
       });
-      setToken(data.session.access_token);
-      setAuthModalOpen(false);
-    } else if (data.user) {
-      // Supabase email confirmation might be enabled
-      setUser({
-        id: data.user.id,
-        name: cleanName,
-        email: data.user.email || cleanEmail,
+      if (error) {
+        throw new Error(error.message || "Failed to update profile.");
+      }
+      if (data.user) {
+        setUser(buildUserFromSession(data.user));
+      }
+    },
+    [],
+  );
+
+  const updatePreferences = useCallback(
+    async (newPrefs: Partial<UserPreferences>) => {
+      if (!user) return;
+      const merged: UserPreferences = {
+        ...(user.preferences || DEFAULT_PREFERENCES),
+        ...newPrefs,
+      };
+      const { data, error } = await supabase.auth.updateUser({
+        data: { preferences: merged },
       });
-      setAuthModalOpen(false);
+      if (error) {
+        throw new Error(error.message || "Failed to update preferences.");
+      }
+      if (data.user) {
+        setUser(buildUserFromSession(data.user));
+      }
+    },
+    [user],
+  );
+
+  const deleteAccount = useCallback(async () => {
+    // Sign out from Supabase and clear local state
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
     }
+    setUser(null);
+    setToken(null);
   }, []);
 
   const logout = useCallback(async () => {
@@ -168,6 +237,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         login,
         register,
         logout,
+        resetPassword,
+        updateProfile,
+        updatePreferences,
+        deleteAccount,
         openAuth,
         closeAuth,
         authModalOpen,

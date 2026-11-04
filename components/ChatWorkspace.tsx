@@ -5,8 +5,10 @@ import { useAuth } from "./AuthContext";
 import { useToast } from "./Toast";
 import { MarkdownBody } from "./MarkdownBody";
 import { SourcesPanel } from "./SourcesPanel";
+import { AnswerActions } from "./AnswerActions";
 import type { ChatSource } from "@/lib/types";
 import type { DocumentRecord } from "@/lib/documents";
+import type { BookmarkedAnswer } from "./BookmarkedAnswersView";
 
 export interface ChatMessage {
   id: string;
@@ -21,10 +23,18 @@ export interface Conversation {
   title: string;
   messages: ChatMessage[];
   updatedAt: number;
+  pinned?: boolean;
 }
 
 interface ChatWorkspaceProps {
   onBackToHome: () => void;
+  onOpenDashboard?: () => void;
+  onOpenDocuments?: () => void;
+  onOpenBookmarks?: () => void;
+  onOpenProfile?: () => void;
+  initialDocScope?: string;
+  bookmarks: BookmarkedAnswer[];
+  onToggleBookmark: (answer: Omit<BookmarkedAnswer, "id" | "createdAt">) => void;
 }
 
 function generateId(prefix: string): string {
@@ -37,7 +47,16 @@ const EXAMPLE_PROMPTS = [
   "Summarize the key engineering formulas and concepts from my uploaded notes.",
 ];
 
-export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
+export function ChatWorkspace({
+  onBackToHome,
+  onOpenDashboard,
+  onOpenDocuments,
+  onOpenBookmarks,
+  onOpenProfile,
+  initialDocScope,
+  bookmarks,
+  onToggleBookmark,
+}: ChatWorkspaceProps) {
   const { user, token, logout, openAuth } = useAuth();
   const { showToast } = useToast();
 
@@ -50,15 +69,24 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
   const [activeConvId, setActiveConvId] = useState<string>("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
+  // Document RAG Scope: "all" or specific document ID
+  const [selectedDocScope, setSelectedDocScope] = useState<string>(initialDocScope || "all");
+
   // Input & Streaming State
   const [input, setInput] = useState("");
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
 
+  // Renaming Session State
+  const [renamingConvId, setRenamingConvId] = useState<string | null>(null);
+  const [newTitleInput, setNewTitleInput] = useState("");
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Auto-scroll on new message
   useEffect(() => {
@@ -136,6 +164,40 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
     setSidebarOpen(false);
   };
 
+  // Toggle Pin Conversation
+  const handleTogglePin = (e: React.MouseEvent, convId: string) => {
+    e.stopPropagation();
+    setConversations((prev) =>
+      prev.map((c) => (c.id === convId ? { ...c, pinned: !c.pinned } : c)),
+    );
+    showToast("Session pin updated", "info");
+  };
+
+  // Rename Conversation
+  const handleSaveRename = (convId: string) => {
+    const trimmed = newTitleInput.trim();
+    if (trimmed) {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === convId ? { ...c, title: trimmed } : c)),
+      );
+      // Persist title update
+      void fetch("/api/conversations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          id: convId,
+          title: trimmed,
+          messages,
+          userId,
+        }),
+      }).catch(() => null);
+    }
+    setRenamingConvId(null);
+  };
+
   // Delete Conversation
   const handleDeleteConv = async (e: React.MouseEvent, convId: string) => {
     e.stopPropagation();
@@ -175,6 +237,9 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
       if (!res.ok) throw new Error("Failed to delete document");
       showToast(`Deleted ${name} from Qdrant`, "success");
       await refreshDocuments();
+      if (selectedDocScope === docId) {
+        setSelectedDocScope("all");
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Delete failed";
       showToast(msg, "error");
@@ -219,8 +284,18 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
     }
   };
 
+  // Stop Streaming Generation
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      setIsStreaming(false);
+      showToast("Generation stopped", "info");
+    }
+  };
+
   // Send Doubt Question
-  const handleSend = async (overridePrompt?: string) => {
+  const handleSend = async (overridePrompt?: string, customHistory?: ChatMessage[]) => {
     const questionText = (overridePrompt ?? input).trim();
     if (!questionText || isStreaming) return;
 
@@ -228,8 +303,9 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
     const userMessageId = generateId("msg_u");
     const assistantMessageId = generateId("msg_a");
 
+    const baseHistory = customHistory || messages;
     const newMessages: ChatMessage[] = [
-      ...messages,
+      ...baseHistory,
       { id: userMessageId, role: "user", content: questionText },
       { id: assistantMessageId, role: "assistant", content: "" },
     ];
@@ -237,15 +313,25 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
     setMessages(newMessages);
     setIsStreaming(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
+      const payload: Record<string, unknown> = {
+        messages: newMessages.slice(0, -1).map(({ role, content }) => ({ role, content })),
+        sessionId: userId,
+        scope: selectedDocScope === "all" ? "all" : "private",
+      };
+
+      if (selectedDocScope !== "all") {
+        payload.documentId = selectedDocScope;
+      }
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: newMessages.slice(0, -1).map(({ role, content }) => ({ role, content })),
-          sessionId: userId,
-          scope: "all",
-        }),
+        body: JSON.stringify(payload),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -318,7 +404,7 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
 
       // Persist Conversation Updates to Backend & LocalStorage
       const updatedMessages: ChatMessage[] = [
-        ...messages,
+        ...baseHistory,
         { id: userMessageId, role: "user", content: questionText },
         { id: assistantMessageId, role: "assistant", content: accumulatedContent, sources: sourcesBox.list },
       ];
@@ -338,7 +424,7 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
           id: activeConvId,
           title: currentTitle,
           messages: updatedMessages,
-          updatedAt: 0,
+          updatedAt: Date.now(),
         };
         if (idx >= 0) {
           updated[idx] = newRecord;
@@ -363,6 +449,9 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
         }),
       }).catch(() => null);
     } catch (err: unknown) {
+      if ((err as Error)?.name === "AbortError") {
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Error receiving tutor answer";
       showToast(msg, "error");
       setMessages((curr) =>
@@ -372,9 +461,51 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
       );
     } finally {
       setIsStreaming(false);
+      abortControllerRef.current = null;
       textareaRef.current?.focus();
     }
   };
+
+  // Regenerate Answer for a given user prompt
+  const handleRegenerate = (userIndex: number) => {
+    if (isStreaming || userIndex < 0) return;
+    const userPrompt = messages[userIndex]?.content;
+    if (!userPrompt) return;
+
+    // Prune history to right before this user turn
+    const prunedHistory = messages.slice(0, userIndex);
+    void handleSend(userPrompt, prunedHistory);
+  };
+
+  // Append Study Tool Output
+  const handleAppendToolOutput = (toolLabel: string, output: string) => {
+    const formatted = `\n\n### 💡 ${toolLabel}\n\n${output}`;
+    setMessages((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (last.role === "assistant") {
+        return [...prev.slice(0, -1), { ...last, content: last.content + formatted }];
+      }
+      return [
+        ...prev,
+        { id: generateId("msg_tool"), role: "assistant", content: `### 💡 ${toolLabel}\n\n${output}` },
+      ];
+    });
+  };
+
+  // Edit user prompt in place
+  const handleStartEditMessage = (msg: ChatMessage) => {
+    setInput(msg.content);
+    setEditingMessageId(msg.id);
+    textareaRef.current?.focus();
+  };
+
+  // Sorted Conversations (pinned first)
+  const sortedConversations = [...conversations].sort((a, b) => {
+    if (a.pinned && !b.pinned) return -1;
+    if (!a.pinned && b.pinned) return 1;
+    return (b.updatedAt || 0) - (a.updatedAt || 0);
+  });
 
   return (
     <div className="flex h-screen w-full bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
@@ -404,7 +535,7 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
             </div>
             <div>
               <p className="text-xs font-bold text-white leading-none">Engineering Tutor</p>
-              <p className="text-[10px] text-zinc-400 group-hover:text-indigo-400 transition mt-0.5">← Back to Home</p>
+              <p className="text-[10px] text-zinc-400 group-hover:text-indigo-400 transition mt-0.5">← Home</p>
             </div>
           </button>
 
@@ -429,6 +560,34 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
           </button>
         </div>
 
+        {/* Quick Nav Shortcuts */}
+        <div className="px-3 pb-2 flex items-center gap-1 border-b border-zinc-800/60">
+          {onOpenDashboard && (
+            <button
+              onClick={onOpenDashboard}
+              className="flex-1 py-1.5 px-2 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition text-center"
+            >
+              📊 Dashboard
+            </button>
+          )}
+          {onOpenDocuments && (
+            <button
+              onClick={onOpenDocuments}
+              className="flex-1 py-1.5 px-2 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition text-center"
+            >
+              📚 Library
+            </button>
+          )}
+          {onOpenBookmarks && (
+            <button
+              onClick={onOpenBookmarks}
+              className="flex-1 py-1.5 px-2 rounded-lg text-[11px] font-medium text-zinc-400 hover:text-white hover:bg-zinc-800/60 transition text-center"
+            >
+              🔖 Saved
+            </button>
+          )}
+        </div>
+
         {/* Middle Scrollable Section: Documents & Sessions */}
         <div className="flex-1 overflow-y-auto px-3 space-y-6 py-2">
           {/* Section: Uploaded Knowledge Base (PDFs in Qdrant) */}
@@ -442,7 +601,7 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                 disabled={isUploading}
                 className="text-[11px] font-medium text-indigo-400 hover:text-indigo-300 flex items-center gap-1 transition"
               >
-                <span>+ Upload PDF</span>
+                <span>+ Upload</span>
               </button>
             </div>
 
@@ -458,22 +617,22 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                 onClick={() => fileInputRef.current?.click()}
                 className="cursor-pointer rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40 p-4 text-center hover:border-zinc-700 transition"
               >
-                <p className="text-xs text-zinc-400">No PDFs uploaded yet.</p>
-                <p className="text-[10px] text-zinc-500 mt-1">Click to upload lecture notes or textbook chapters to activate RAG.</p>
+                <p className="text-xs text-zinc-400">No PDFs indexed yet.</p>
+                <p className="text-[10px] text-zinc-500 mt-1">Upload lecture notes or textbook chapters to activate RAG.</p>
               </div>
             ) : (
               <div className="space-y-1.5">
-                {documents.map((doc) => (
+                {documents.slice(0, 5).map((doc) => (
                   <div
                     key={doc.id}
-                    className="group flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-2.5 hover:border-zinc-700 transition"
+                    className="group flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-2 hover:border-zinc-700 transition"
                   >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-base text-indigo-400">📄</span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-sm text-indigo-400">📄</span>
                       <div className="min-w-0">
                         <p className="text-xs font-medium text-zinc-200 truncate">{doc.name}</p>
-                        <p className="text-[10px] text-zinc-500">
-                          {doc.pageCount || 1} pages • {doc.chunkCount || 0} vectors in Qdrant
+                        <p className="text-[9px] text-zinc-500">
+                          {doc.pageCount || 1}p • {doc.chunkCount || 0} vectors
                         </p>
                       </div>
                     </div>
@@ -488,6 +647,14 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                     </button>
                   </div>
                 ))}
+                {documents.length > 5 && onOpenDocuments && (
+                  <button
+                    onClick={onOpenDocuments}
+                    className="w-full text-center py-1 text-[11px] text-indigo-400 hover:underline"
+                  >
+                    View all {documents.length} materials →
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -501,28 +668,71 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
             </div>
 
             <div className="space-y-1">
-              {conversations.map((conv) => {
+              {sortedConversations.map((conv) => {
                 const isActive = conv.id === activeConvId;
+                const isRenaming = renamingConvId === conv.id;
+
                 return (
                   <div
                     key={conv.id}
                     onClick={() => handleSelectConv(conv)}
-                    className={`group flex items-center justify-between rounded-xl px-3 py-2 text-xs cursor-pointer transition ${
+                    className={`group flex items-center justify-between rounded-xl px-2.5 py-2 text-xs cursor-pointer transition ${
                       isActive
                         ? "bg-zinc-800 text-white font-medium"
                         : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
                     }`}
                   >
-                    <span className="truncate pr-2">{conv.title}</span>
-                    <button
-                      onClick={(e) => void handleDeleteConv(e, conv.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition"
-                      title="Delete chat"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
+                    {isRenaming ? (
+                      <input
+                        type="text"
+                        autoFocus
+                        value={newTitleInput}
+                        onChange={(e) => setNewTitleInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleSaveRename(conv.id);
+                          if (e.key === "Escape") setRenamingConvId(null);
+                        }}
+                        onBlur={() => handleSaveRename(conv.id)}
+                        className="w-full bg-zinc-900 border border-indigo-500 rounded px-1.5 py-0.5 text-xs text-white outline-none"
+                      />
+                    ) : (
+                      <div className="flex items-center gap-1.5 min-w-0 pr-1">
+                        {conv.pinned && <span className="text-[10px] text-indigo-400">📌</span>}
+                        <span className="truncate">{conv.title}</span>
+                      </div>
+                    )}
+
+                    {!isRenaming && (
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          onClick={(e) => handleTogglePin(e, conv.id)}
+                          className="p-1 text-zinc-500 hover:text-indigo-400"
+                          title={conv.pinned ? "Unpin session" : "Pin session"}
+                        >
+                          📌
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenamingConvId(conv.id);
+                            setNewTitleInput(conv.title);
+                          }}
+                          className="p-1 text-zinc-500 hover:text-white"
+                          title="Rename session"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          onClick={(e) => void handleDeleteConv(e, conv.id)}
+                          className="p-1 text-zinc-500 hover:text-red-400"
+                          title="Delete session"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -533,15 +743,19 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
         {/* Sidebar Footer: User Profile */}
         <div className="p-3 border-t border-zinc-800/80 bg-zinc-950/60 flex items-center justify-between">
           {user ? (
-            <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              onClick={onOpenProfile}
+              className="flex items-center gap-2.5 min-w-0 text-left hover:opacity-80 transition"
+              title="Open Student Profile"
+            >
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600/30 text-indigo-300 font-bold text-xs border border-indigo-500/20">
                 {user.name.slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-white truncate">{user.name}</p>
-                <p className="text-[10px] text-zinc-400 truncate font-mono">{user.email}</p>
+                <p className="text-[10px] text-zinc-400 truncate font-mono">{user.major || user.email}</p>
               </div>
-            </div>
+            </button>
           ) : (
             <div className="min-w-0">
               <p className="text-xs font-semibold text-white">Guest Student</p>
@@ -549,7 +763,7 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                 onClick={() => openAuth("login")}
                 className="text-[10px] text-indigo-400 hover:underline"
               >
-                Sign in to sync across devices
+                Sign in to save progress
               </button>
             </div>
           )}
@@ -587,6 +801,25 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Document Scope Selector */}
+            {documents.length > 0 && (
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="hidden sm:inline text-zinc-400 text-[11px]">Scope:</span>
+                <select
+                  value={selectedDocScope}
+                  onChange={(e) => setSelectedDocScope(e.target.value)}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 outline-none focus:border-indigo-500 max-w-[160px] truncate"
+                >
+                  <option value="all">📚 All Uploaded Notes</option>
+                  {documents.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      📄 {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-400">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
               <span>{documents.length} PDF{documents.length === 1 ? "" : "s"} in Qdrant</span>
@@ -626,12 +859,18 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
               </div>
             </div>
           ) : (
-            messages.map((message) => {
+            messages.map((message, idx) => {
               const isUser = message.role === "user";
+              // Find matching question for assistant answer
+              const correspondingQuestion = !isUser && idx > 0 ? messages[idx - 1]?.content : "";
+              const isBookmarked = bookmarks.some(
+                (b) => b.question === correspondingQuestion || b.answer === message.content,
+              );
+
               return (
                 <div
                   key={message.id}
-                  className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}
+                  className={`flex gap-3 group ${isUser ? "justify-end" : "justify-start"}`}
                 >
                   {!isUser && (
                     <div className="flex-shrink-0 h-8 w-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-xs flex items-center justify-center shadow-xs">
@@ -640,14 +879,23 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                   )}
 
                   <div
-                    className={`rounded-2xl px-4 py-3 max-w-[85%] sm:max-w-[75%] ${
+                    className={`rounded-2xl px-4 py-3 max-w-[88%] sm:max-w-[78%] ${
                       isUser
                         ? "bg-indigo-600 text-white shadow-sm"
                         : "border border-zinc-800 bg-zinc-900/80 text-zinc-100 shadow-sm"
                     }`}
                   >
                     {isUser ? (
-                      <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+                        <button
+                          onClick={() => handleStartEditMessage(message)}
+                          className="opacity-0 group-hover:opacity-100 text-indigo-200 hover:text-white p-0.5 transition text-xs"
+                          title="Edit question"
+                        >
+                          ✏️
+                        </button>
+                      </div>
                     ) : (
                       <div className="space-y-3">
                         {message.content ? (
@@ -664,6 +912,27 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
                             <SourcesPanel sources={message.sources} />
                           </div>
                         )}
+
+                        {/* Functional Study Tools & Action Bar for complete answers */}
+                        {message.content && !message.error && (
+                          <AnswerActions
+                            questionText={correspondingQuestion}
+                            answerText={message.content}
+                            sources={message.sources}
+                            isBookmarked={isBookmarked}
+                            onToggleBookmark={() =>
+                              onToggleBookmark({
+                                userId,
+                                conversationId: activeConvId,
+                                question: correspondingQuestion || "Engineering Doubt",
+                                answer: message.content,
+                                sources: message.sources,
+                              })
+                            }
+                            onRegenerate={() => handleRegenerate(idx - 1)}
+                            onAppendToolOutput={handleAppendToolOutput}
+                          />
+                        )}
                       </div>
                     )}
                   </div>
@@ -676,7 +945,35 @@ export function ChatWorkspace({ onBackToHome }: ChatWorkspaceProps) {
 
         {/* Bottom Input Area */}
         <div className="p-4 bg-zinc-950 border-t border-zinc-800/80 max-w-4xl mx-auto w-full">
+          {/* Stop generation pill */}
+          {isStreaming && (
+            <div className="flex justify-center mb-2">
+              <button
+                onClick={handleStopGeneration}
+                className="flex items-center gap-2 rounded-full border border-red-500/30 bg-red-500/10 hover:bg-red-500/20 px-3.5 py-1 text-xs font-medium text-red-400 transition shadow-sm"
+              >
+                <span className="h-2 w-2 bg-red-400 rounded-xs" />
+                <span>Stop Generating</span>
+              </button>
+            </div>
+          )}
+
           <div className="relative rounded-2xl border border-zinc-800 bg-zinc-900/90 p-2 focus-within:border-indigo-500 transition shadow-lg">
+            {editingMessageId && (
+              <div className="flex items-center justify-between px-3 py-1 mb-1 text-[11px] text-indigo-400 bg-indigo-500/10 rounded-lg">
+                <span>Editing previous question</span>
+                <button
+                  onClick={() => {
+                    setEditingMessageId(null);
+                    setInput("");
+                  }}
+                  className="hover:underline"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             <textarea
               ref={textareaRef}
               rows={1}

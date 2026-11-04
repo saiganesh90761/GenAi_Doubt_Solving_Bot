@@ -4,19 +4,34 @@ import React, { useState } from "react";
 import { useAuth } from "./AuthContext";
 import { useToast } from "./Toast";
 
+const ENGINEERING_MAJORS = [
+  "General Engineering",
+  "Computer Science & Engineering",
+  "Electrical & Electronics Engineering",
+  "Mechanical Engineering",
+  "Civil & Structural Engineering",
+  "Chemical & Process Engineering",
+  "Aerospace Engineering",
+  "Biomedical Engineering",
+];
+
 export function AuthModal() {
-  const { authModalOpen, authModalMode, closeAuth, login, register, openAuth } = useAuth();
+  const { authModalOpen, authModalMode, closeAuth, login, register, resetPassword, openAuth } = useAuth();
   const { showToast } = useToast();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [major, setMajor] = useState("General Engineering");
+  const [institution, setInstitution] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
 
   if (!authModalOpen) return null;
 
   const isLogin = authModalMode === "login";
+  const isForgot = authModalMode === "forgot";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,16 +39,17 @@ export function AuthModal() {
     setIsSubmitting(true);
 
     try {
-      if (isLogin) {
+      if (isForgot) {
+        await resetPassword(email);
+        setResetSent(true);
+        showToast("Password reset link sent to your email!", "info");
+      } else if (isLogin) {
         await login(email, password);
-        showToast("Welcome back!", "success");
+        showToast("Welcome back to Engineering Doubt Solver!", "success");
       } else {
-        await register(name, email, password);
-        showToast("Account created successfully! Welcome to Engineering Doubt Solver.", "success");
+        await register(name, email, password, institution, major);
+        showToast("Account created successfully! Welcome to your academic workspace.", "success");
       }
-      setName("");
-      setEmail("");
-      setPassword("");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Authentication error";
       setErrorMessage(msg);
@@ -44,11 +60,11 @@ export function AuthModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200"
       onClick={closeAuth}
     >
       <div
-        className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 sm:p-8 shadow-2xl text-zinc-100"
+        className="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 sm:p-8 shadow-2xl text-zinc-100 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
@@ -71,46 +87,54 @@ export function AuthModal() {
             </svg>
           </div>
           <h2 className="text-xl font-bold text-white tracking-tight">
-            {isLogin ? "Welcome back" : "Create your account"}
+            {isForgot
+              ? "Reset your password"
+              : isLogin
+              ? "Welcome back"
+              : "Create your student account"}
           </h2>
           <p className="mt-1 text-xs text-zinc-400">
-            {isLogin
-              ? "Sign in to access your uploaded documents & conversations"
-              : "Sign up to store your study materials and chat history"}
+            {isForgot
+              ? "Enter your email to receive a password reset link"
+              : isLogin
+              ? "Sign in to access your uploaded documents & doubts"
+              : "Join to index your textbooks in Qdrant and save conversations"}
           </p>
         </div>
 
         {/* Mode Switcher */}
-        <div className="flex rounded-xl bg-zinc-800/80 p-1 mb-6 border border-zinc-700/50">
-          <button
-            type="button"
-            onClick={() => {
-              setErrorMessage(null);
-              openAuth("login");
-            }}
-            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
-              isLogin
-                ? "bg-zinc-700 text-white shadow-xs"
-                : "text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            Sign In
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setErrorMessage(null);
-              openAuth("register");
-            }}
-            className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
-              !isLogin
-                ? "bg-zinc-700 text-white shadow-xs"
-                : "text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            Create Account
-          </button>
-        </div>
+        {!isForgot && (
+          <div className="flex rounded-xl bg-zinc-800/80 p-1 mb-5 border border-zinc-700/50">
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage(null);
+                openAuth("login");
+              }}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
+                isLogin
+                  ? "bg-zinc-700 text-white shadow-xs"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage(null);
+                openAuth("register");
+              }}
+              className={`flex-1 rounded-lg py-1.5 text-xs font-semibold transition ${
+                !isLogin
+                  ? "bg-zinc-700 text-white shadow-xs"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+        )}
 
         {/* Error Alert */}
         {errorMessage && (
@@ -119,9 +143,16 @@ export function AuthModal() {
           </div>
         )}
 
+        {/* Reset Confirmation */}
+        {resetSent && (
+          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300">
+            Password reset link dispatched. Please check your inbox and spam folder.
+          </div>
+        )}
+
         {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {!isLogin && (
+        <form onSubmit={handleSubmit} className="space-y-3.5">
+          {!isLogin && !isForgot && (
             <div>
               <label className="block text-xs font-medium text-zinc-300 mb-1">Full Name</label>
               <input
@@ -130,7 +161,7 @@ export function AuthModal() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Alex Morgan"
-                className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
               />
             </div>
           )}
@@ -143,22 +174,69 @@ export function AuthModal() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="student@university.edu"
-              className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1">Password</label>
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2.5 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
+          {!isLogin && !isForgot && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">Engineering Discipline / Major</label>
+                <select
+                  value={major}
+                  onChange={(e) => setMajor(e.target.value)}
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3 py-2 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                >
+                  {ENGINEERING_MAJORS.map((m) => (
+                    <option key={m} value={m} className="bg-zinc-800 text-white">
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1">University / Institute (Optional)</label>
+                <input
+                  type="text"
+                  value={institution}
+                  onChange={(e) => setInstitution(e.target.value)}
+                  placeholder="e.g. Stanford / MIT / IIT / TU Munich"
+                  className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+            </>
+          )}
+
+          {!isForgot && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-zinc-300">Password</label>
+                {isLogin && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage(null);
+                      setResetSent(false);
+                      openAuth("forgot");
+                    }}
+                    className="text-[11px] text-indigo-400 hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full rounded-xl border border-zinc-700 bg-zinc-800/80 px-3.5 py-2 text-sm text-white placeholder-zinc-500 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          )}
 
           <button
             type="submit"
@@ -167,19 +245,31 @@ export function AuthModal() {
           >
             {isSubmitting ? (
               <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            ) : isForgot ? (
+              "Send Reset Link"
             ) : isLogin ? (
               "Sign In"
             ) : (
-              "Create Account"
+              "Create Student Account"
             )}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-zinc-500">
-          Secure engineering session • Conversations saved to your profile
+        {isForgot && (
+          <div className="mt-4 text-center">
+            <button
+              onClick={() => openAuth("login")}
+              className="text-xs text-indigo-400 hover:underline"
+            >
+              ← Back to Sign In
+            </button>
+          </div>
+        )}
+
+        <p className="mt-5 text-center text-[10px] text-zinc-500">
+          Grounded on Qdrant Cloud • Powered by NVIDIA Nemotron 3
         </p>
       </div>
     </div>
   );
 }
-
