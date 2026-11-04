@@ -1,4 +1,4 @@
-import { verifyToken, getUserById } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -7,16 +7,16 @@ export async function GET(request: Request) {
   }
 
   const token = authHeader.slice(7);
-  const verified = verifyToken(token);
-  if (!verified) {
+  const { data: { user }, error } = await supabase.auth.getUser(token);
+  if (error || !user) {
     return Response.json({ user: null }, { status: 401 });
   }
 
-  const user = getUserById(verified.userId);
-  if (!user) {
-    return Response.json({ user: null }, { status: 401 });
-  }
-
-  return Response.json({ user });
+  return Response.json({
+    user: {
+      id: user.id,
+      name: (user.user_metadata?.name as string) || user.email?.split("@")[0] || "Student",
+      email: user.email,
+    },
+  });
 }
-

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
+import { getStorageDirectory } from "./paths";
 
 export interface StorageResult {
   storageKey: string;
@@ -22,18 +23,19 @@ class LocalObjectStorage implements ObjectStorage {
   private baseDir: string;
 
   constructor() {
-    this.baseDir = path.join(process.cwd(), "data", "storage");
-    if (!existsSync(this.baseDir)) {
-      mkdirSync(this.baseDir, { recursive: true });
-    }
+    this.baseDir = getStorageDirectory();
   }
 
   private resolvePath(key: string): string {
     const cleanKey = key.replace(/^[/\\]+/, "").replace(/[/\\]+/g, path.sep);
     const fullPath = path.join(this.baseDir, cleanKey);
     const parent = path.dirname(fullPath);
-    if (!existsSync(parent)) {
-      mkdirSync(parent, { recursive: true });
+    try {
+      if (!existsSync(parent)) {
+        mkdirSync(parent, { recursive: true });
+      }
+    } catch {
+      // ignore
     }
     return fullPath;
   }

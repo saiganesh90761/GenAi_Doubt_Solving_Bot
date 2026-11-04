@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { supabase } from "./supabase";
+import { getStorageDirectory } from "./paths";
 import type { ChatSource } from "./types";
 
 export interface ChatMessage {
@@ -20,20 +21,16 @@ export interface Conversation {
   updatedAt: number;
 }
 
-const STORAGE_DIR = path.join(process.cwd(), "data", "storage");
-const CONV_FILE = path.join(STORAGE_DIR, "conversations.json");
-
-function ensureStorageDir() {
-  if (!existsSync(STORAGE_DIR)) {
-    mkdirSync(STORAGE_DIR, { recursive: true });
-  }
+function getConversationFile(): string {
+  const dir = getStorageDirectory();
+  return path.join(dir, "conversations.json");
 }
 
 function loadLocalConversations(): Conversation[] {
-  ensureStorageDir();
-  if (!existsSync(CONV_FILE)) return [];
+  const convFile = getConversationFile();
+  if (!existsSync(convFile)) return [];
   try {
-    const raw = readFileSync(CONV_FILE, "utf8");
+    const raw = readFileSync(convFile, "utf8");
     return JSON.parse(raw) as Conversation[];
   } catch {
     return [];
@@ -41,8 +38,8 @@ function loadLocalConversations(): Conversation[] {
 }
 
 function saveLocalConversations(conversations: Conversation[]): void {
-  ensureStorageDir();
-  writeFileSync(CONV_FILE, JSON.stringify(conversations, null, 2), "utf8");
+  const convFile = getConversationFile();
+  writeFileSync(convFile, JSON.stringify(conversations, null, 2), "utf8");
 }
 
 export async function getUserConversations(userId: string): Promise<Conversation[]> {

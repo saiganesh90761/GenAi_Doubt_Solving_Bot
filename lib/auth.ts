@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { getStorageDirectory } from "./paths";
 
 export interface User {
   id: string;
@@ -13,23 +14,20 @@ export interface User {
 
 export type SafeUser = Omit<User, "passwordHash" | "salt">;
 
-const STORAGE_DIR = path.join(process.cwd(), "data", "storage");
-const USERS_FILE = path.join(STORAGE_DIR, "users.json");
 const AUTH_SECRET = process.env.AUTH_SECRET || "engineering-doubt-solver-secret-key-2026";
 
-function ensureStorageDir() {
-  if (!existsSync(STORAGE_DIR)) {
-    mkdirSync(STORAGE_DIR, { recursive: true });
-  }
+function getUsersFile(): string {
+  const dir = getStorageDirectory();
+  return path.join(dir, "users.json");
 }
 
 function loadUsers(): User[] {
-  ensureStorageDir();
-  if (!existsSync(USERS_FILE)) {
+  const usersFile = getUsersFile();
+  if (!existsSync(usersFile)) {
     return [];
   }
   try {
-    const raw = readFileSync(USERS_FILE, "utf8");
+    const raw = readFileSync(usersFile, "utf8");
     return JSON.parse(raw) as User[];
   } catch {
     return [];
@@ -37,8 +35,8 @@ function loadUsers(): User[] {
 }
 
 function saveUsers(users: User[]): void {
-  ensureStorageDir();
-  writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), "utf8");
+  const usersFile = getUsersFile();
+  writeFileSync(usersFile, JSON.stringify(users, null, 2), "utf8");
 }
 
 function hashPassword(password: string, salt: string): string {

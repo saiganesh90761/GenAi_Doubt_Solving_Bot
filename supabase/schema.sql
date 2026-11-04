@@ -26,3 +26,4 @@ create policy "Allow all operations for conversations"
   for all
   using (true)
   with check (true);
+

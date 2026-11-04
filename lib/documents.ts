@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { deleteChunksByDocument, deleteChunksByDocumentId } from "./qdrant";
 import { storage } from "./storage";
+import { getStorageDirectory } from "./paths";
 
 export type KnowledgeScope = "global" | "private";
 export type DocumentStatus = "uploading" | "processing" | "ready" | "error";
@@ -24,23 +25,19 @@ export interface DocumentRecord {
   updatedAt: number;
 }
 
-const REGISTRY_DIR = path.join(process.cwd(), "data", "storage", "metadata");
-const REGISTRY_FILE = path.join(REGISTRY_DIR, "documents-registry.json");
-
-function ensureRegistryDir() {
-  if (!existsSync(REGISTRY_DIR)) {
-    mkdirSync(REGISTRY_DIR, { recursive: true });
-  }
+function getRegistryFile(): string {
+  const dir = getStorageDirectory("metadata");
+  return path.join(dir, "documents-registry.json");
 }
 
 function loadRegistry(): Map<string, DocumentRecord> {
-  ensureRegistryDir();
-  if (!existsSync(REGISTRY_FILE)) {
+  const registryFile = getRegistryFile();
+  if (!existsSync(registryFile)) {
     return new Map();
   }
 
   try {
-    const raw = readFileSync(REGISTRY_FILE, "utf8").trim();
+    const raw = readFileSync(registryFile, "utf8").trim();
     if (!raw) return new Map();
     const array = JSON.parse(raw) as DocumentRecord[];
     const map = new Map<string, DocumentRecord>();
@@ -55,9 +52,8 @@ function loadRegistry(): Map<string, DocumentRecord> {
 }
 
 function saveRegistry(map: Map<string, DocumentRecord>) {
-  ensureRegistryDir();
   const list = Array.from(map.values());
-  writeFileSync(REGISTRY_FILE, JSON.stringify(list, null, 2), "utf8");
+  writeFileSync(getRegistryFile(), JSON.stringify(list, null, 2), "utf8");
 }
 
 export async function createDocument(doc: DocumentRecord): Promise<DocumentRecord> {
