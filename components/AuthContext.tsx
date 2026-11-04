@@ -1,12 +1,12 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
 
 export interface User {
   id: string;
   name: string;
   email: string;
-  createdAt: number;
 }
 
 interface AuthContextType {
@@ -24,56 +24,61 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const TOKEN_KEY = "doubt_solver_auth_token";
-const USER_KEY = "doubt_solver_auth_user";
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem(TOKEN_KEY);
-  });
-
-  const [user, setUser] = useState<User | null>(() => {
-    if (typeof window === "undefined") return null;
-    const savedUser = localStorage.getItem(USER_KEY);
-    if (!savedUser) return null;
-    try {
-      return JSON.parse(savedUser) as User;
-    } catch {
-      return null;
-    }
-  });
-
-  const [isLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<"login" | "register">("login");
 
-  // Verify user session with server in background
+  // Sync Supabase Auth Session
   useEffect(() => {
-    if (!token) return;
     let ignore = false;
 
-    void fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (res.ok) return res.json();
-        throw new Error("Session expired");
-      })
-      .then((data) => {
-        if (!ignore && data.user) {
-          setUser(data.user);
-          localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    async function initSession() {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+        if (!ignore && data.session?.user) {
+          const u = data.session.user;
+          setUser({
+            id: u.id,
+            name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
+            email: u.email || "",
+          });
+          setToken(data.session.access_token);
         }
-      })
-      .catch(() => {
-        // keep existing session
-      });
+      } catch (err) {
+        console.warn("[Supabase Auth] Session fetch notice:", err);
+      } finally {
+        if (!ignore) setIsLoading(false);
+      }
+    }
+
+    void initSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const u = session.user;
+        setUser({
+          id: u.id,
+          name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
+          email: u.email || "",
+        });
+        setToken(session.access_token);
+      } else {
+        setUser(null);
+        setToken(null);
+      }
+    });
 
     return () => {
       ignore = true;
+      subscription.unsubscribe();
     };
-  }, [token]);
+  }, []);
 
   const openAuth = useCallback((mode: "login" | "register" = "login") => {
     setAuthModalMode(mode);
@@ -85,48 +90,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || "Login failed");
+    if (error) {
+      throw new Error(error.message || "Invalid login credentials.");
     }
 
-    setUser(data.user);
-    setToken(data.token);
-    localStorage.setItem(TOKEN_KEY, data.token);
-    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-    setAuthModalOpen(false);
+    if (data.session?.user) {
+      const u = data.session.user;
+      setUser({
+        id: u.id,
+        name: (u.user_metadata?.name as string) || u.email?.split("@")[0] || "Student",
+        email: u.email || "",
+      });
+      setToken(data.session.access_token);
+      setAuthModalOpen(false);
+    }
   }, []);
 
   const register = useCallback(async (name: string, email: string, password: string) => {
-    const res = await fetch("/api/auth/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password,
+      options: {
+        data: {
+          name: cleanName,
+        },
+      },
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || "Registration failed");
+    if (error) {
+      throw new Error(error.message || "Registration failed.");
     }
 
-    setUser(data.user);
-    setToken(data.token);
-    localStorage.setItem(TOKEN_KEY, data.token);
-    localStorage.setItem(USER_KEY, JSON.stringify(data.user));
-    setAuthModalOpen(false);
+    if (data.session?.user) {
+      const u = data.session.user;
+      setUser({
+        id: u.id,
+        name: cleanName || u.email?.split("@")[0] || "Student",
+        email: u.email || "",
+      });
+      setToken(data.session.access_token);
+      setAuthModalOpen(false);
+    } else if (data.user) {
+      // Supabase email confirmation might be enabled
+      setUser({
+        id: data.user.id,
+        name: cleanName,
+        email: data.user.email || cleanEmail,
+      });
+      setAuthModalOpen(false);
+    }
   }, []);
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
+    }
     setUser(null);
     setToken(null);
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
   }, []);
 
   return (

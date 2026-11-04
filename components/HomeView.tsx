@@ -154,3 +154,4 @@ export function HomeView({ onEnterWorkspace }: HomeViewProps) {
     </div>
   );
 }
+

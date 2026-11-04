@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     return Response.json({ conversations: [] }, { status: 401 });
   }
 
-  const conversations = getUserConversations(userId);
+  const conversations = await getUserConversations(userId);
   return Response.json({ conversations });
 }
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const saved = saveUserConversation(userId, body);
+    const saved = await saveUserConversation(userId, body);
     return Response.json({ conversation: saved });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Failed to save conversation";
@@ -55,6 +55,7 @@ export async function DELETE(request: Request) {
     return Response.json({ error: "Missing conversation id" }, { status: 400 });
   }
 
-  const deleted = deleteUserConversation(userId, convId);
+  const deleted = await deleteUserConversation(userId, convId);
   return Response.json({ success: deleted });
 }
+
