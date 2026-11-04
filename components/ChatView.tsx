@@ -253,7 +253,7 @@ export function ChatView({ sessionId, onRefreshLibrary }: ChatViewProps) {
       const decoder = new TextDecoder();
       let buffer = "";
       let accumulatedContent = "";
-      let finalSources: ChatSource[] = [];
+      const sourcesBox = { list: [] as ChatSource[] };
 
       while (true) {
         const { value, done } = await reader.read();
@@ -277,10 +277,11 @@ export function ChatView({ sessionId, onRefreshLibrary }: ChatViewProps) {
             };
 
             if (parsed.type === "sources" && Array.isArray(parsed.sources)) {
-              finalSources = parsed.sources;
+              const incoming = [...parsed.sources];
+              sourcesBox.list = incoming;
               setMessages((curr) =>
                 curr.map((m) =>
-                  m.id === assistantMessageId ? { ...m, sources: finalSources } : m,
+                  m.id === assistantMessageId ? { ...m, sources: incoming } : m,
                 ),
               );
             }
@@ -330,7 +331,7 @@ export function ChatView({ sessionId, onRefreshLibrary }: ChatViewProps) {
           messages: [
             ...messages,
             { id: userMessageId, role: "user", content: questionText },
-            { id: assistantMessageId, role: "assistant", content: accumulatedContent, sources: finalSources },
+            { id: assistantMessageId, role: "assistant", content: accumulatedContent, sources: sourcesBox.list },
           ],
         };
         try {

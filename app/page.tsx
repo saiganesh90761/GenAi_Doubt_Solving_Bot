@@ -13,12 +13,13 @@ function AppContent() {
   const [activeTab, setActiveTab] = useState<NavTab>("chat");
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
 
-  // Persistent student session ID across page reloads
+  // Persistent student session ID across page reloads & tabs
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
-    let id = sessionStorage.getItem("engineering_doubt_session_id");
+    let id = localStorage.getItem("engineering_doubt_session_id") || sessionStorage.getItem("engineering_doubt_session_id");
     if (!id) {
       id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      localStorage.setItem("engineering_doubt_session_id", id);
       sessionStorage.setItem("engineering_doubt_session_id", id);
     }
     return id;
@@ -39,8 +40,27 @@ function AppContent() {
   }, [sessionId]);
 
   useEffect(() => {
-    void refreshLibrary();
-  }, [refreshLibrary]);
+    let ignore = false;
+    const load = async () => {
+      try {
+        const url = sessionId
+          ? `/api/library?sessionId=${encodeURIComponent(sessionId)}`
+          : "/api/library";
+        const res = await fetch(url);
+        if (!res.ok || ignore) return;
+        const data = await res.json();
+        if (!ignore) {
+          setDocuments(data.documents || []);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void load();
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId]);
 
   return (
     <div className="flex flex-col h-screen min-h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50 font-sans antialiased overflow-hidden">

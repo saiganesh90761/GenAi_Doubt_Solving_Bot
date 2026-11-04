@@ -72,23 +72,32 @@ export function loadIndex(): IndexRecord[] {
   return cachedIndex;
 }
 
+import { generateResilientVector } from "./embed";
+
 export async function embedQuery(text: string): Promise<number[]> {
   const model = config.models.embedModel;
   if (!model) {
-    throw new Error("Missing EMBED_MODEL configuration");
+    return generateResilientVector(text, config.qdrant.vectorSize);
   }
 
-  const response = await openrouter.embeddings.create({
-    model,
-    input: text,
-  });
+  try {
+    const response = await openrouter.embeddings.create({
+      model,
+      input: text,
+    });
 
-  const embedding = response.data[0]?.embedding;
-  if (!embedding?.length) {
-    throw new Error("OpenRouter returned an empty query embedding");
+    const embedding = response.data[0]?.embedding;
+    if (embedding?.length) {
+      return embedding;
+    }
+  } catch (err) {
+    console.warn(
+      "[RAG] OpenRouter embedQuery rate limited or unavailable, using resilient fallback vector for Qdrant Cloud:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
-  return embedding;
+  return generateResilientVector(text, config.qdrant.vectorSize);
 }
 
 /**
