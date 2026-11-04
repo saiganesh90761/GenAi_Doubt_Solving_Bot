@@ -1,22 +1,32 @@
+import crypto from "node:crypto";
 import { APIError, RateLimitError } from "openai";
 import { extractPagesFromPdf, pagesToPendingChunks } from "@/lib/chunk";
 import { embedTexts } from "@/lib/embed";
-import { upsertChunks, deleteChunksByDocument } from "@/lib/qdrant";
+import { upsertChunks } from "@/lib/qdrant";
+import { validatePdfFile } from "@/lib/validation";
+import { storage } from "@/lib/storage";
+import {
+  createDocument,
+  findDocumentByHash,
+  updateDocumentStatus,
+  deleteDocument,
+  listDocuments,
+  type KnowledgeScope,
+  type DocumentRecord,
+} from "@/lib/documents";
 import type { IndexRecord, VectorChunkPayload } from "@/lib/types";
 
 export const maxDuration = 60;
 
-const MAX_BYTES = 10 * 1024 * 1024;
-
-function jsonError(status: number, message: string) {
-  return Response.json({ error: message }, { status });
+function jsonError(status: number, message: string, details?: Record<string, unknown>) {
+  return Response.json({ error: message, ...details }, { status });
 }
 
 function friendlyEmbedError(error: unknown): { status: number; message: string } {
   if (error instanceof RateLimitError || (error instanceof APIError && error.status === 429)) {
     return {
       status: 429,
-      message: "Embedding is rate limited right now. Wait a moment and try the upload again.",
+      message: "Embedding is rate limited right now. Please wait a moment and try the upload again.",
     };
   }
 
@@ -30,7 +40,7 @@ function friendlyEmbedError(error: unknown): { status: number; message: string }
 
     return {
       status: 502,
-      message: "Could not embed this PDF. Please try again.",
+      message: "Could not embed this PDF with OpenRouter. Please try again.",
     };
   }
 
@@ -47,103 +57,204 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("file");
-  const sessionId = form.get("sessionId") as string | null;
+  const sessionId = (form.get("sessionId") as string | null) || null;
+  const rawScope = form.get("scope") as string | null;
+  const subject = ((form.get("subject") as string | null) || "General Engineering").trim();
+
+  // Determine knowledge scope: "global" (admin library) or "private" (student upload)
+  const isGlobal = rawScope === "global";
+  const knowledgeScope: KnowledgeScope = isGlobal ? "global" : "private";
+
+  if (!isGlobal && !sessionId) {
+    return jsonError(400, "Missing sessionId for private student upload.");
+  }
 
   if (!(file instanceof File)) {
-    return jsonError(400, "Choose a PDF file to upload.");
+    return jsonError(400, "Choose a valid PDF file to upload.");
   }
 
-  if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
-    return jsonError(400, "Only PDF files are supported.");
-  }
-
-  if (file.size > MAX_BYTES) {
-    return jsonError(400, "PDF must be 10 MB or smaller.");
-  }
-
+  // 1. Read buffer and validate signature, MIME type, and size
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const pages = await extractPagesFromPdf(bytes);
-  const { pending, emptyPages } = pagesToPendingChunks(file.name, pages);
+  const validation = validatePdfFile(bytes, file.name, file.type, isGlobal);
+  if (!validation.valid) {
+    return jsonError(400, validation.error || "Invalid PDF file.");
+  }
 
-  if (pending.length === 0) {
+  // 2. Duplicate Detection via SHA-256 hash
+  const existingDoc = await findDocumentByHash(
+    validation.fileHash,
+    knowledgeScope,
+    isGlobal ? null : sessionId,
+  );
+  if (existingDoc && existingDoc.status === "ready") {
     return jsonError(
-      400,
-      emptyPages.length
-        ? "No extractable text found. This PDF may be scanned images only."
-        : "No text could be extracted from this PDF.",
+      409,
+      `Duplicate upload: A document with identical content already exists ('${existingDoc.name}').`,
+      { existingDocument: existingDoc },
     );
   }
 
+  // 3. Register document in Object Storage & Registry with 'processing' status
+  const documentId = crypto.randomUUID();
+  const storageKey = `documents/${knowledgeScope}/${documentId}.pdf`;
+
+  try {
+    await storage.put(storageKey, bytes, "application/pdf");
+  } catch (error) {
+    console.error("[Upload] Failed to store file in object storage:", error);
+    return jsonError(500, "Failed to store PDF in persistent storage.");
+  }
+
+  const initialDoc: DocumentRecord = {
+    id: documentId,
+    name: file.name,
+    fileHash: validation.fileHash,
+    fileSize: validation.fileSize,
+    mimeType: "application/pdf",
+    pageCount: 0,
+    chunkCount: 0,
+    subject: subject || "General Engineering",
+    knowledgeScope,
+    ownerId: isGlobal ? null : sessionId,
+    status: "processing",
+    storageKey,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  await createDocument(initialDoc);
+
+  // 4. Extract pages and validate text extraction
+  let pages: string[];
+  try {
+    pages = await extractPagesFromPdf(bytes);
+  } catch (error) {
+    await updateDocumentStatus(documentId, "error", {
+      errorMessage: "Failed to extract text from PDF.",
+    });
+    await storage.delete(storageKey);
+    return jsonError(400, "Could not parse PDF content.", {
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const { pending, emptyPages } = pagesToPendingChunks(file.name, pages);
+
+  if (pending.length === 0) {
+    const errorMsg = emptyPages.length
+      ? "No extractable text found. This PDF may contain scanned images only without OCR."
+      : "The uploaded PDF contains no readable text.";
+    await updateDocumentStatus(documentId, "error", { errorMessage: errorMsg });
+    await storage.delete(storageKey);
+    return jsonError(400, errorMsg, { emptyPages });
+  }
+
+  // 5. Generate embeddings via OpenRouter
   let embeddings: number[][];
   try {
     embeddings = await embedTexts(pending.map((item) => item.text));
   } catch (error) {
     const { status, message } = friendlyEmbedError(error);
+    await updateDocumentStatus(documentId, "error", { errorMessage: message });
     return jsonError(status, message);
   }
 
-  const chunks: IndexRecord[] = pending.map((item, index) => ({
-    ...item,
-    embedding: embeddings[index],
-    documentId: file.name.replace(/[^a-zA-Z0-9_-]/g, "_"),
-    subject: "Student Upload",
-    documentType: "pdf",
-    ownerId: sessionId || null,
-    knowledgeScope: "private",
-  }));
+  // 6. Index chunks into Qdrant Cloud
+  const qdrantPoints: Array<{ id: string; vector: number[]; payload: VectorChunkPayload }> = [];
+  const clientChunks: IndexRecord[] = [];
 
-  // Store chunks into Qdrant Cloud under private scope
-  try {
-    const qdrantPoints = chunks.map((c) => {
-      const payload: VectorChunkPayload = {
-        chunkId: c.id,
-        documentId: c.documentId || file.name,
-        documentName: c.file,
-        text: c.text,
-        page: c.page,
-        subject: "Student Upload",
-        documentType: "pdf",
-        ownerId: sessionId || null,
-        knowledgeScope: "private",
-        createdAt: Date.now(),
-      };
-      return {
-        id: c.id,
-        vector: c.embedding,
-        payload,
-      };
+  for (let index = 0; index < pending.length; index++) {
+    const item = pending[index];
+    const vector = embeddings[index];
+    const chunkId = `${documentId}::p${item.page}::c${index}`;
+
+    const payload: VectorChunkPayload = {
+      chunkId,
+      documentId,
+      documentName: file.name,
+      text: item.text,
+      page: item.page,
+      subject: subject || "General Engineering",
+      documentType: isGlobal ? "reference_textbook" : "student_notes",
+      ownerId: isGlobal ? null : sessionId,
+      knowledgeScope,
+      createdAt: Date.now(),
+    };
+
+    qdrantPoints.push({
+      id: chunkId,
+      vector,
+      payload,
     });
 
-    await upsertChunks(qdrantPoints);
-  } catch (error) {
-    console.warn("[Upload] Warning: Could not index chunks directly to Qdrant Cloud:", error);
+    clientChunks.push({
+      id: chunkId,
+      text: item.text,
+      file: file.name,
+      page: item.page,
+      embedding: vector,
+      documentId,
+      subject: subject || "General Engineering",
+      documentType: isGlobal ? "reference_textbook" : "student_notes",
+      ownerId: isGlobal ? null : sessionId,
+      knowledgeScope,
+    });
   }
 
+  try {
+    await upsertChunks(qdrantPoints);
+  } catch (error) {
+    console.error("[Upload] Failed to index chunks to Qdrant Cloud:", error);
+    await updateDocumentStatus(documentId, "error", {
+      errorMessage: "Failed to index vectors in Qdrant Cloud.",
+    });
+    return jsonError(500, "Vector indexing failed. Please try again.");
+  }
+
+  // 7. Update status to 'ready'
+  const finalDoc = await updateDocumentStatus(documentId, "ready", {
+    pageCount: pages.length,
+    chunkCount: pending.length,
+  });
+
   return Response.json({
+    success: true,
     file: file.name,
-    chunks,
-    chunkCount: chunks.length,
+    document: finalDoc,
+    chunks: clientChunks,
+    chunkCount: pending.length,
     emptyPages,
+    scope: knowledgeScope,
   });
 }
 
 export async function DELETE(request: Request) {
-  let body: { file?: string; sessionId?: string } | null = null;
+  let body: { id?: string; file?: string; sessionId?: string } | null = null;
   try {
-    body = (await request.json()) as { file?: string; sessionId?: string };
+    body = (await request.json()) as { id?: string; file?: string; sessionId?: string };
   } catch {
-    return jsonError(400, "Expected JSON body with { file, sessionId }");
+    return jsonError(400, "Expected JSON body with { id } or { file, sessionId }");
   }
 
-  if (!body?.file) {
-    return jsonError(400, "Missing 'file' parameter");
+  // Deletion by document ID
+  if (body?.id) {
+    const success = await deleteDocument(body.id);
+    if (!success) {
+      return jsonError(404, "Document not found or already deleted.");
+    }
+    return Response.json({ success: true, id: body.id });
   }
 
-  try {
-    await deleteChunksByDocument(body.file, body.sessionId || null);
+  // Deletion by file name and sessionId (legacy student remove)
+  if (body?.file && body?.sessionId) {
+    const docs = await listDocuments({ sessionId: body.sessionId, scope: "private" });
+    const target = docs.find((d) => d.name === body.file);
+    if (target) {
+      await deleteDocument(target.id);
+      return Response.json({ success: true, id: target.id, file: body.file });
+    }
     return Response.json({ success: true, file: body.file });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to delete document chunks";
-    return jsonError(500, message);
   }
+
+  return jsonError(400, "Specify 'id' or 'file' with 'sessionId' to delete.");
 }

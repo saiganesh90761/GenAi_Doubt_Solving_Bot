@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkMath from "remark-math";
@@ -15,14 +15,19 @@ type ChatMessage = {
 };
 
 type LibraryDoc = {
+  id?: string;
+  name?: string;
   file: string;
-  pages: number;
-  chunks: number;
-};
-
-type UploadedFile = {
-  name: string;
-  chunkCount: number;
+  pages?: number;
+  pageCount?: number;
+  chunks?: number;
+  chunkCount?: number;
+  subject?: string;
+  knowledgeScope?: "global" | "private";
+  status?: string;
+  errorMessage?: string;
+  fileSize?: number;
+  createdAt?: number;
 };
 
 const EXAMPLES = [
@@ -145,8 +150,10 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [uploadHint, setUploadHint] = useState<string | null>(null);
   const [library, setLibrary] = useState<LibraryDoc[]>([]);
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [userChunks, setUserChunks] = useState<IndexRecord[]>([]);
+  const [uploadScope, setUploadScope] = useState<"private" | "global">("private");
+  const [uploadSubject, setUploadSubject] = useState<string>("General Engineering");
+  const [uploadStage, setUploadStage] = useState<string | null>(null);
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     let id = sessionStorage.getItem("engineering_doubt_session_id");
@@ -161,25 +168,26 @@ export default function Home() {
   const fileRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const uploadedNames = useMemo(
-    () => new Set(uploadedFiles.map((file) => file.name)),
-    [uploadedFiles],
-  );
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isStreaming]);
-
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
-  }, [input]);
+  const refreshLibrary = useCallback(async () => {
+    try {
+      const url = sessionId
+        ? `/api/library?sessionId=${encodeURIComponent(sessionId)}`
+        : "/api/library";
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const data = (await response.json()) as { documents: LibraryDoc[] };
+      setLibrary(data.documents ?? []);
+    } catch {
+      setLibrary([]);
+    }
+  }, [sessionId]);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/library")
+    const url = sessionId
+      ? `/api/library?sessionId=${encodeURIComponent(sessionId)}`
+      : "/api/library";
+    fetch(url)
       .then(async (response) => {
         if (!response.ok) return;
         const data = (await response.json()) as { documents: LibraryDoc[] };
@@ -191,7 +199,18 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sessionId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isStreaming]);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [input]);
 
   async function sendMessage(event?: FormEvent, preset?: string) {
     event?.preventDefault();
@@ -303,6 +322,7 @@ export default function Home() {
     if (fileRef.current) fileRef.current.value = "";
 
     setIsUploading(true);
+    setUploadStage("Validating & extracting text…");
     setUploadHint(null);
     setError(null);
 
@@ -310,16 +330,21 @@ export default function Home() {
 
     try {
       for (const file of files) {
+        setUploadStage(`Processing ${file.name}…`);
         const body = new FormData();
         body.append("file", file);
+        body.append("scope", uploadScope);
+        body.append("subject", uploadSubject || "General Engineering");
         if (sessionId) {
           body.append("sessionId", sessionId);
         }
+
         const response = await fetch("/api/upload", { method: "POST", body });
         const data = (await response.json()) as {
           error?: string;
           file?: string;
           chunks?: IndexRecord[];
+          chunkCount?: number;
           emptyPages?: number[];
         };
 
@@ -329,41 +354,56 @@ export default function Home() {
 
         const name = data.file ?? file.name;
         const chunks = data.chunks ?? [];
+        const count = data.chunkCount ?? chunks.length;
 
-        setUserChunks((current) => [
-          ...current.filter((chunk) => chunk.file !== name),
-          ...chunks,
-        ]);
-        setUploadedFiles((current) => [
-          ...current.filter((item) => item.name !== name),
-          { name, chunkCount: chunks.length },
-        ]);
+        if (uploadScope === "private") {
+          setUserChunks((current) => [
+            ...current.filter((chunk) => chunk.file !== name),
+            ...chunks,
+          ]);
+        }
 
         notes.push(
           data.emptyPages?.length
-            ? `${name}: ${chunks.length} chunks (skipped scanned pages ${data.emptyPages.join(", ")})`
-            : `${name}: ${chunks.length} chunks`,
+            ? `${name}: ${count} chunks (skipped blank pages ${data.emptyPages.join(", ")})`
+            : `${name}: ${count} chunks indexed`,
         );
       }
       setUploadHint(notes.join(" · "));
+      await refreshLibrary();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Upload failed.");
     } finally {
       setIsUploading(false);
+      setUploadStage(null);
     }
   }
 
-  function removeUpload(name: string) {
-    setUploadedFiles((current) => current.filter((item) => item.name !== name));
-    setUserChunks((current) => current.filter((chunk) => chunk.file !== name));
-    if (sessionId) {
-      fetch("/api/upload", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file: name, sessionId }),
-      }).catch((err) => {
-        console.warn("Could not delete from server:", err);
-      });
+  async function deleteDocItem(id?: string, fileName?: string) {
+    if (!id && !fileName) return;
+    try {
+      if (id && !id.startsWith("local_") && !id.startsWith("qdrant_")) {
+        const res = await fetch(`/api/library/${id}?sessionId=${encodeURIComponent(sessionId)}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(err?.error || "Could not delete document.");
+        }
+      } else if (fileName) {
+        await fetch("/api/upload", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: fileName, sessionId }),
+        });
+      }
+
+      if (fileName) {
+        setUserChunks((current) => current.filter((chunk) => chunk.file !== fileName));
+      }
+      await refreshLibrary();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Deletion failed.");
     }
   }
 
@@ -372,7 +412,7 @@ export default function Home() {
       <div className="border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Your PDFs
+            Document Management
           </p>
           <button
             type="button"
@@ -382,11 +422,53 @@ export default function Home() {
             Close
           </button>
         </div>
+
+        {/* Scope Selector: Private Student Upload vs Global Academic Reference */}
+        <div className="mt-3 flex rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+          <button
+            type="button"
+            onClick={() => setUploadScope("private")}
+            className={`flex-1 rounded-md py-1.5 text-xs font-medium transition ${
+              uploadScope === "private"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200"
+            }`}
+          >
+            Student (Private)
+          </button>
+          <button
+            type="button"
+            onClick={() => setUploadScope("global")}
+            className={`flex-1 rounded-md py-1.5 text-xs font-medium transition ${
+              uploadScope === "global"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-900 dark:text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200"
+            }`}
+          >
+            Admin (Global)
+          </button>
+        </div>
+
+        {uploadScope === "global" && (
+          <div className="mt-2.5">
+            <label className="block text-[11px] font-medium text-zinc-500">
+              Subject / Topic
+            </label>
+            <input
+              type="text"
+              value={uploadSubject}
+              onChange={(e) => setUploadSubject(e.target.value)}
+              placeholder="e.g. Electrical Engineering"
+              className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
+            />
+          </div>
+        )}
+
         <input
           ref={fileRef}
           type="file"
           accept="application/pdf,.pdf"
-          multiple
+          multiple={false}
           className="sr-only"
           onChange={(event) => onUpload(event.target.files)}
         />
@@ -396,7 +478,9 @@ export default function Home() {
           onClick={() => fileRef.current?.click()}
           className="mt-3 w-full rounded-xl bg-zinc-900 px-3 py-2.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
         >
-          {isUploading ? "Indexing PDF…" : "Upload PDF"}
+          {isUploading
+            ? (uploadStage || "Processing PDF…")
+            : (uploadScope === "global" ? "Upload Academic PDF" : "Upload Student PDF")}
         </button>
         {uploadHint && (
           <p className="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">{uploadHint}</p>
@@ -404,57 +488,96 @@ export default function Home() {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-4">
-        <ul className="space-y-2">
-          {uploadedFiles.length === 0 && (
-            <li className="text-sm text-zinc-500">No personal PDFs yet.</li>
-          )}
-          {uploadedFiles.map((file) => (
-            <li
-              key={file.name}
-              className="flex items-start justify-between gap-2 rounded-xl border border-zinc-200 bg-white px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900"
-            >
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium" title={file.name}>
-                  {file.name}
-                </p>
-                <p className="text-xs text-zinc-500">{file.chunkCount} chunks</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => removeUpload(file.name)}
-                className="shrink-0 rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-red-600 dark:hover:bg-zinc-800 dark:hover:text-red-400"
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
+        {/* Document Library Section */}
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Available Documents ({library.length})
+          </p>
+          <button
+            type="button"
+            onClick={() => void refreshLibrary()}
+            className="text-[11px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+            title="Refresh library"
+          >
+            Refresh
+          </button>
+        </div>
 
-        <p className="mt-6 text-xs font-semibold uppercase tracking-wide text-zinc-500">
-          Library
-        </p>
-        <ul className="mt-3 space-y-2">
+        <ul className="mt-3 space-y-2.5">
           {library.length === 0 && (
             <li className="text-sm leading-6 text-zinc-500">
-              No pre-loaded documents yet. Add PDFs to <code>data/pdfs</code> and run{" "}
-              <code>npm run ingest</code>.
+              No documents available. Upload an academic textbook or your personal student PDF above.
             </li>
           )}
-          {library.map((doc) => (
-            <li
-              key={doc.file}
-              className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900/70"
-            >
-              <p className="truncate text-sm font-medium" title={doc.file}>
-                {doc.file}
-              </p>
-              <p className="text-xs text-zinc-500">
-                {doc.pages ? `${doc.pages} pages · ` : ""}
-                {doc.chunks} chunks
-                {uploadedNames.has(doc.file) ? " · also uploaded" : ""}
-              </p>
-            </li>
-          ))}
+          {library.map((doc) => {
+            const isGlobalDoc = doc.knowledgeScope === "global";
+            const docId = doc.id;
+            const canView = docId && !docId.startsWith("local_") && !docId.startsWith("qdrant_");
+
+            return (
+              <li
+                key={doc.id || doc.file}
+                className="rounded-xl border border-zinc-200 bg-white p-3 shadow-xs dark:border-zinc-800 dark:bg-zinc-900"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium" title={doc.file}>
+                      {doc.file}
+                    </p>
+
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      {isGlobalDoc ? (
+                        <span className="inline-flex items-center rounded-sm bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                          Global Reference
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-sm bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                          Private Notes
+                        </span>
+                      )}
+
+                      {doc.status && doc.status !== "ready" && (
+                        <span className="inline-flex items-center rounded-sm bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                          {doc.status}
+                        </span>
+                      )}
+
+                      {doc.subject && (
+                        <span className="text-[11px] text-zinc-400">
+                          {doc.subject}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {doc.pages || doc.pageCount ? `${doc.pages || doc.pageCount} pages · ` : ""}
+                      {doc.chunks || doc.chunkCount ? `${doc.chunks || doc.chunkCount} chunks` : ""}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-zinc-100 pt-2 dark:border-zinc-800">
+                  {canView && (
+                    <a
+                      href={`/api/library/${doc.id}?sessionId=${encodeURIComponent(sessionId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-md px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      View PDF
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => deleteDocItem(doc.id, doc.file)}
+                    className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>

@@ -81,6 +81,7 @@ ${context}`;
 }
 
 function friendlyError(error: unknown): { status: number; message: string } {
+  console.error("[Chat Route Error]:", error);
   if (error instanceof RateLimitError || (error instanceof APIError && error.status === 429)) {
     return {
       status: 429,

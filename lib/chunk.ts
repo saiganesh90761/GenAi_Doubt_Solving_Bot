@@ -28,7 +28,7 @@ export function chunkText(
 
 export async function extractPagesFromPdf(bytes: Uint8Array): Promise<string[]> {
   const pdf = await getDocumentProxy(bytes);
-  const { text } = await extractText(pdf);
+  const { text } = await extractText(pdf, { mergePages: false });
   return Array.isArray(text) ? text : [text];
 }
 

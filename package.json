@@ -9,7 +9,8 @@
     "lint": "eslint",
     "ingest": "npx tsx scripts/ingest.ts",
     "migrate": "npx tsx scripts/migrate.ts",
-    "test:rag": "npx tsx scripts/test-rag.ts"
+    "test:rag": "npx tsx scripts/test-rag.ts",
+    "test:doc-mgmt": "npx tsx scripts/test-document-management.ts"
   },
   "dependencies": {
     "@qdrant/js-client-rest": "^1.20.0",

@@ -27,3 +27,8 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+
+# Local document storage
+/data/storage/**
+!/data/storage/.gitkeep
+

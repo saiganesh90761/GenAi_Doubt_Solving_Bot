@@ -1,8 +1,9 @@
 import { EMBED_BATCH_SIZE } from "./chunk";
 import { openrouter } from "./openrouter";
+import { config } from "./config";
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const model = process.env.EMBED_MODEL;
+  const model = config.models.embedModel;
   if (!model) {
     throw new Error("Missing EMBED_MODEL");
   }

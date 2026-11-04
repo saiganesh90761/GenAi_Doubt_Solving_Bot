@@ -65,25 +65,25 @@ export async function ensureCollection(
         },
       });
       console.log(`[Qdrant] Collection '${collectionName}' created successfully.`);
+    }
 
-      const indexFields = [
-        "knowledgeScope",
-        "ownerId",
-        "documentName",
-        "documentId",
-        "subject",
-        "documentType",
-      ];
-      for (const field of indexFields) {
-        try {
-          await client.createPayloadIndex(collectionName, {
-            field_name: field,
-            field_schema: "keyword",
-            wait: true,
-          });
-        } catch {
-          // ignore if already indexed
-        }
+    const indexFields = [
+      "knowledgeScope",
+      "ownerId",
+      "documentName",
+      "documentId",
+      "subject",
+      "documentType",
+    ];
+    for (const field of indexFields) {
+      try {
+        await client.createPayloadIndex(collectionName, {
+          field_name: field,
+          field_schema: "keyword",
+          wait: true,
+        });
+      } catch {
+        // ignore if already indexed
       }
     }
     collectionEnsured = true;
@@ -231,6 +231,30 @@ export async function searchChunks(params: {
     }));
   } catch (error) {
     console.error("[Qdrant] Search failed:", error);
+    throw error;
+  }
+}
+
+export async function deleteChunksByDocumentId(
+  documentId: string,
+  collectionName: string = config.qdrant.collectionName,
+): Promise<{ deleted: boolean }> {
+  const client = getQdrantClient();
+  const must: FilterCondition[] = [
+    {
+      key: "documentId",
+      match: { value: documentId },
+    },
+  ];
+
+  try {
+    await client.delete(collectionName, {
+      wait: true,
+      filter: { must },
+    });
+    return { deleted: true };
+  } catch (error) {
+    console.error(`[Qdrant] Failed to delete chunks for documentId ${documentId}:`, error);
     throw error;
   }
 }
