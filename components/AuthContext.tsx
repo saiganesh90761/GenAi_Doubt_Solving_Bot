@@ -17,14 +17,17 @@ export interface User {
   major?: string;
   year?: string;
   preferences?: UserPreferences;
+  isGuest?: boolean;
 }
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isLoading: boolean;
+  isGuest: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string, institution?: string, major?: string) => Promise<void>;
+  loginAsGuest: (guestName?: string, major?: string) => void;
   logout: () => void;
   resetPassword: (email: string) => Promise<void>;
   updateProfile: (updates: { name?: string; institution?: string; major?: string; year?: string }) => Promise<void>;
@@ -64,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   };
 
-  // Sync Supabase Auth Session
+  // Sync Supabase Auth Session or Guest Session
   useEffect(() => {
     let ignore = false;
 
@@ -75,6 +78,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!ignore && data.session?.user) {
           setUser(buildUserFromSession(data.session.user));
           setToken(data.session.access_token);
+          return;
+        }
+
+        // If no active Supabase session, check for persistent guest session
+        if (!ignore && typeof window !== "undefined") {
+          const savedGuest = localStorage.getItem("eds_guest_user");
+          if (savedGuest) {
+            try {
+              const parsed = JSON.parse(savedGuest) as User;
+              if (parsed && parsed.id) {
+                setUser(parsed);
+              }
+            } catch {
+              // ignore
+            }
+          }
         }
       } catch (err) {
         console.warn("[Supabase Auth] Session fetch notice:", err);
@@ -91,7 +110,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (session?.user) {
         setUser(buildUserFromSession(session.user));
         setToken(session.access_token);
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("eds_guest_user");
+        }
       } else {
+        // If logged out from Supabase, only clear if not in guest mode
+        if (typeof window !== "undefined") {
+          const savedGuest = localStorage.getItem("eds_guest_user");
+          if (savedGuest) {
+            try {
+              setUser(JSON.parse(savedGuest) as User);
+              return;
+            } catch {
+              // ignore
+            }
+          }
+        }
         setUser(null);
         setToken(null);
       }
@@ -112,7 +146,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAuthModalOpen(false);
   }, []);
 
+  const loginAsGuest = useCallback((guestName = "Guest Student", guestMajor = "General Engineering") => {
+    let existingGuestId = typeof window !== "undefined" ? localStorage.getItem("eds_guest_id") : null;
+    if (!existingGuestId) {
+      existingGuestId = `guest_${Math.random().toString(36).slice(2, 9)}`;
+      if (typeof window !== "undefined") {
+        localStorage.setItem("eds_guest_id", existingGuestId);
+      }
+    }
+
+    const guestUser: User = {
+      id: existingGuestId,
+      name: guestName,
+      email: `${existingGuestId}@engineering.local`,
+      institution: "Guest Workspace",
+      major: guestMajor,
+      year: "1st Year Undergraduate",
+      preferences: DEFAULT_PREFERENCES,
+      isGuest: true,
+    };
+
+    if (typeof window !== "undefined") {
+      localStorage.setItem("eds_guest_user", JSON.stringify(guestUser));
+    }
+
+    setUser(guestUser);
+    setToken(null);
+    setAuthModalOpen(false);
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("eds_guest_user");
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -131,6 +198,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = useCallback(
     async (name: string, email: string, password: string, institution?: string, major?: string) => {
+      if (typeof window !== "undefined") {
+        localStorage.removeItem("eds_guest_user");
+      }
+
       const cleanName = name.trim();
       const cleanEmail = email.trim();
 
@@ -196,6 +267,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const updateProfile = useCallback(
     async (updates: { name?: string; institution?: string; major?: string; year?: string }) => {
+      if (user?.isGuest) {
+        const updated: User = {
+          ...user,
+          ...updates,
+        };
+        setUser(updated);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("eds_guest_user", JSON.stringify(updated));
+        }
+        return;
+      }
+
       const { data, error } = await supabase.auth.updateUser({
         data: updates,
       });
@@ -206,7 +289,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(buildUserFromSession(data.user));
       }
     },
-    [],
+    [user],
   );
 
   const updatePreferences = useCallback(
@@ -216,6 +299,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         ...(user.preferences || DEFAULT_PREFERENCES),
         ...newPrefs,
       };
+
+      if (user.isGuest) {
+        const updated: User = {
+          ...user,
+          preferences: merged,
+        };
+        setUser(updated);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("eds_guest_user", JSON.stringify(updated));
+        }
+        return;
+      }
+
       const { data, error } = await supabase.auth.updateUser({
         data: { preferences: merged },
       });
@@ -230,7 +326,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const deleteAccount = useCallback(async () => {
-    // Sign out from Supabase and clear local state
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("eds_guest_user");
+      localStorage.removeItem("eds_guest_id");
+    }
     try {
       await supabase.auth.signOut();
     } catch {
@@ -241,6 +340,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("eds_guest_user");
+    }
     try {
       await supabase.auth.signOut();
     } catch {
@@ -256,8 +358,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         token,
         isLoading,
+        isGuest: Boolean(user?.isGuest),
         login,
         register,
+        loginAsGuest,
         logout,
         resetPassword,
         updateProfile,

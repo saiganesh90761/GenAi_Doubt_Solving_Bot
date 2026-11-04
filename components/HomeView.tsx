@@ -8,7 +8,12 @@ interface HomeViewProps {
 }
 
 export function HomeView({ onEnterWorkspace }: HomeViewProps) {
-  const { user, openAuth } = useAuth();
+  const { user, openAuth, loginAsGuest } = useAuth();
+
+  const handleGuestEntry = () => {
+    loginAsGuest();
+    onEnterWorkspace();
+  };
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
@@ -47,14 +52,22 @@ export function HomeView({ onEnterWorkspace }: HomeViewProps) {
             ) : (
               <div className="flex items-center gap-2">
                 <button
+                  onClick={handleGuestEntry}
+                  className="rounded-xl border border-zinc-700/80 bg-zinc-900/80 hover:bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:text-white transition flex items-center gap-1.5"
+                  title="Explore all features without signing up"
+                >
+                  <span className="text-amber-400">⚡</span>
+                  <span>Guest Mode</span>
+                </button>
+                <button
                   onClick={() => openAuth("login")}
-                  className="rounded-xl px-3.5 py-1.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/80 transition"
+                  className="rounded-xl px-3 py-1.5 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-800/80 transition"
                 >
                   Sign In
                 </button>
                 <button
                   onClick={() => openAuth("register")}
-                  className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-xs font-semibold text-white shadow-sm transition"
+                  className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition"
                 >
                   Get Started
                 </button>
@@ -79,31 +92,44 @@ export function HomeView({ onEnterWorkspace }: HomeViewProps) {
           Upload your textbooks, lecture notes, and syllabus PDFs. Ask questions to get step-by-step mathematical derivations, formula breakdowns, and circuit analysis strictly verified against your materials.
         </p>
 
-        {/* Primary Action */}
+        {/* Primary Actions */}
         <div className="mt-8 flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-          <button
-            onClick={() => {
-              if (user) {
-                onEnterWorkspace();
-              } else {
-                openAuth("register");
-              }
-            }}
-            className="w-full sm:w-auto rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition flex items-center justify-center gap-2 group"
-          >
-            <span>{user ? "Open Tutor Workspace" : "Start Solving Doubts Free"}</span>
-            <svg className="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          </button>
-
-          {!user && (
+          {user ? (
             <button
-              onClick={() => openAuth("login")}
-              className="w-full sm:w-auto rounded-xl border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 px-6 py-3.5 text-sm font-semibold text-zinc-300 hover:text-white transition"
+              onClick={onEnterWorkspace}
+              className="w-full sm:w-auto rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/25 transition flex items-center justify-center gap-2 group"
             >
-              Log in to Existing Account
+              <span>Open Tutor Workspace</span>
+              <svg className="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
             </button>
+          ) : (
+            <>
+              <button
+                onClick={handleGuestEntry}
+                className="w-full sm:w-auto rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-indigo-600/30 transition flex items-center justify-center gap-2 group"
+              >
+                <span>⚡ Try Instantly as Guest</span>
+                <svg className="w-4 h-4 transition-transform group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+
+              <button
+                onClick={() => openAuth("register")}
+                className="w-full sm:w-auto rounded-xl border border-zinc-700 bg-zinc-900/80 hover:bg-zinc-800 px-6 py-3.5 text-sm font-semibold text-zinc-200 hover:text-white transition"
+              >
+                Create Account
+              </button>
+
+              <button
+                onClick={() => openAuth("login")}
+                className="w-full sm:w-auto px-4 py-3.5 text-sm font-medium text-zinc-400 hover:text-white transition"
+              >
+                Sign In
+              </button>
+            </>
           )}
         </div>
 

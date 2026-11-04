@@ -216,16 +216,30 @@ function MainApp() {
             <div className="flex items-center gap-2">
               {user ? (
                 <div className="flex items-center gap-2">
+                  {user.isGuest && (
+                    <button
+                      onClick={() => openAuth("register")}
+                      className="hidden sm:inline-flex items-center gap-1 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-300 hover:bg-amber-500/20 transition"
+                      title="Create a permanent account to sync notes across devices"
+                    >
+                      <span>⚡ Guest</span>
+                      <span className="text-zinc-400">•</span>
+                      <span className="underline">Save Account</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => setProfileModalOpen(true)}
                     className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900/80 px-2.5 py-1.5 hover:border-zinc-700 transition"
                     title="Student Profile & Settings"
                   >
                     <div className="h-6 w-6 rounded-lg bg-indigo-600/30 text-indigo-300 text-xs font-bold flex items-center justify-center">
-                      {user.name.slice(0, 2).toUpperCase()}
+                      {user.isGuest ? "⚡" : user.name.slice(0, 2).toUpperCase()}
                     </div>
                     <div className="hidden md:block text-left">
-                      <p className="text-xs font-medium text-white leading-none">{user.name}</p>
+                      <p className="text-xs font-medium text-white leading-none">
+                        {user.isGuest ? "Guest Student" : user.name}
+                      </p>
                       <p className="text-[9px] text-zinc-400 font-mono leading-none mt-0.5">{user.major || "Engineering"}</p>
                     </div>
                     <span className="text-zinc-400 text-xs">⚙️</span>
@@ -234,7 +248,7 @@ function MainApp() {
                   <button
                     onClick={logout}
                     className="p-1.5 rounded-xl text-zinc-400 hover:text-red-400 hover:bg-zinc-800 transition"
-                    title="Sign Out"
+                    title={user.isGuest ? "Exit Guest Mode" : "Sign Out"}
                   >
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />

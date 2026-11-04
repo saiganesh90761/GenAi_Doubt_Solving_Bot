@@ -43,13 +43,15 @@ export function StudentDashboard({
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-400 mb-3">
               <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>{user?.major || "Engineering Student"}</span>
+              <span>{user?.isGuest ? `⚡ Guest Mode • ${user.major}` : (user?.major || "Engineering Student")}</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
               Welcome back, {user ? user.name : "Engineering Student"}
             </h1>
             <p className="mt-1.5 text-xs sm:text-sm text-zinc-400 max-w-xl">
-              {readyDocs.length > 0
+              {user?.isGuest
+                ? "Guest Workspace is active. All PDF uploads, Qdrant vectors, and study tools are fully functional."
+                : readyDocs.length > 0
                 ? `Your RAG knowledge base is active with ${readyDocs.length} indexed document(s). Ready to solve derivations and concepts.`
                 : "Upload your engineering notes or textbooks to activate grounded RAG doubt solving with zero hallucinations."}
             </p>

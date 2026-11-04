@@ -749,11 +749,15 @@ export function ChatWorkspace({
               title="Open Student Profile"
             >
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600/30 text-indigo-300 font-bold text-xs border border-indigo-500/20">
-                {user.name.slice(0, 2).toUpperCase()}
+                {user.isGuest ? "⚡" : user.name.slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-semibold text-white truncate">{user.name}</p>
-                <p className="text-[10px] text-zinc-400 truncate font-mono">{user.major || user.email}</p>
+                <p className="text-xs font-semibold text-white truncate">
+                  {user.isGuest ? "Guest Student" : user.name}
+                </p>
+                <p className="text-[10px] text-zinc-400 truncate font-mono">
+                  {user.isGuest ? `${user.major} • Local Session` : (user.major || user.email)}
+                </p>
               </div>
             </button>
           ) : (

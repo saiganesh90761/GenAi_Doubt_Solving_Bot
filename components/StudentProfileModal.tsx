@@ -103,11 +103,11 @@ export function StudentProfileModal({ isOpen, onClose }: StudentProfileModalProp
         <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white font-bold text-sm shadow-md">
-              {user.name.slice(0, 2).toUpperCase()}
+              {user.isGuest ? "⚡" : user.name.slice(0, 2).toUpperCase()}
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">{user.name}</h2>
-              <p className="text-xs text-zinc-400 font-mono">{user.email}</p>
+              <h2 className="text-base font-bold text-white">{user.isGuest ? "Guest Student Profile" : user.name}</h2>
+              <p className="text-xs text-zinc-400 font-mono">{user.isGuest ? "Guest Session • Stored in this browser" : user.email}</p>
             </div>
           </div>
           <button
