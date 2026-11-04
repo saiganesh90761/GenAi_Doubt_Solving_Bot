@@ -57,17 +57,14 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("file");
-  const sessionId = (form.get("sessionId") as string | null) || null;
+  const rawUserId = (form.get("userId") as string | null) || (form.get("sessionId") as string | null) || "guest_user";
   const rawScope = form.get("scope") as string | null;
   const subject = ((form.get("subject") as string | null) || "General Engineering").trim();
 
-  // Determine knowledge scope: "global" (admin library) or "private" (student upload)
+  // Determine knowledge scope
   const isGlobal = rawScope === "global";
   const knowledgeScope: KnowledgeScope = isGlobal ? "global" : "private";
-
-  if (!isGlobal && !sessionId) {
-    return jsonError(400, "Missing sessionId for private student upload.");
-  }
+  const ownerId = isGlobal ? null : rawUserId;
 
   if (!(file instanceof File)) {
     return jsonError(400, "Choose a valid PDF file to upload.");
@@ -84,7 +81,7 @@ export async function POST(request: Request) {
   const existingDoc = await findDocumentByHash(
     validation.fileHash,
     knowledgeScope,
-    isGlobal ? null : sessionId,
+    ownerId,
   );
   if (existingDoc && existingDoc.status === "ready") {
     return jsonError(
@@ -115,7 +112,7 @@ export async function POST(request: Request) {
     chunkCount: 0,
     subject: subject || "General Engineering",
     knowledgeScope,
-    ownerId: isGlobal ? null : sessionId,
+    ownerId,
     status: "processing",
     storageKey,
     createdAt: Date.now(),
@@ -176,7 +173,7 @@ export async function POST(request: Request) {
       page: item.page,
       subject: subject || "General Engineering",
       documentType: isGlobal ? "reference_textbook" : "student_notes",
-      ownerId: isGlobal ? null : sessionId,
+      ownerId,
       knowledgeScope,
       createdAt: Date.now(),
     };
@@ -196,7 +193,7 @@ export async function POST(request: Request) {
       documentId,
       subject: subject || "General Engineering",
       documentType: isGlobal ? "reference_textbook" : "student_notes",
-      ownerId: isGlobal ? null : sessionId,
+      ownerId,
       knowledgeScope,
     });
   }

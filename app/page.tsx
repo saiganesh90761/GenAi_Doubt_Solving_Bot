@@ -1,116 +1,33 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
-import { Navbar, type NavTab } from "@/components/Navbar";
-import { ChatView } from "@/components/ChatView";
-import { LibraryView } from "@/components/LibraryView";
-import { LandingView } from "@/components/LandingView";
-import { AdminView } from "@/components/AdminView";
+import React, { useState } from "react";
+import { AuthProvider } from "@/components/AuthContext";
+import { AuthModal } from "@/components/AuthModal";
 import { ToastProvider } from "@/components/Toast";
-import type { DocumentRecord } from "@/lib/documents";
+import { HomeView } from "@/components/HomeView";
+import { ChatWorkspace } from "@/components/ChatWorkspace";
 
-function AppContent() {
-  const [activeTab, setActiveTab] = useState<NavTab>("chat");
-  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-
-  // Persistent student session ID across page reloads & tabs
-  const [sessionId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    let id = localStorage.getItem("engineering_doubt_session_id") || sessionStorage.getItem("engineering_doubt_session_id");
-    if (!id) {
-      id = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-      localStorage.setItem("engineering_doubt_session_id", id);
-      sessionStorage.setItem("engineering_doubt_session_id", id);
-    }
-    return id;
-  });
-
-  const refreshLibrary = useCallback(async () => {
-    try {
-      const url = sessionId
-        ? `/api/library?sessionId=${encodeURIComponent(sessionId)}`
-        : "/api/library";
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = await res.json();
-      setDocuments(data.documents || []);
-    } catch {
-      // ignore
-    }
-  }, [sessionId]);
-
-  useEffect(() => {
-    let ignore = false;
-    const load = async () => {
-      try {
-        const url = sessionId
-          ? `/api/library?sessionId=${encodeURIComponent(sessionId)}`
-          : "/api/library";
-        const res = await fetch(url);
-        if (!res.ok || ignore) return;
-        const data = await res.json();
-        if (!ignore) {
-          setDocuments(data.documents || []);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    void load();
-    return () => {
-      ignore = true;
-    };
-  }, [sessionId]);
+function MainApp() {
+  const [currentView, setCurrentView] = useState<"home" | "workspace">("home");
 
   return (
-    <div className="flex flex-col h-screen min-h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50 font-sans antialiased overflow-hidden">
-      {/* Top Navigation */}
-      <Navbar
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        documentCount={documents.length}
-      />
-
-      {/* Main View Area */}
-      <main className="flex flex-1 overflow-hidden relative">
-        {activeTab === "chat" && (
-          <ChatView
-            sessionId={sessionId}
-            onRefreshLibrary={refreshLibrary}
-          />
-        )}
-
-        {activeTab === "library" && (
-          <LibraryView
-            documents={documents}
-            onRefresh={refreshLibrary}
-            sessionId={sessionId}
-          />
-        )}
-
-        {activeTab === "how-it-works" && (
-          <LandingView
-            onNavigate={setActiveTab}
-            documentCount={documents.length}
-          />
-        )}
-
-        {activeTab === "admin" && (
-          <AdminView
-            documents={documents}
-            onRefresh={refreshLibrary}
-            sessionId={sessionId}
-          />
-        )}
-      </main>
-    </div>
+    <>
+      <AuthModal />
+      {currentView === "home" ? (
+        <HomeView onEnterWorkspace={() => setCurrentView("workspace")} />
+      ) : (
+        <ChatWorkspace onBackToHome={() => setCurrentView("home")} />
+      )}
+    </>
   );
 }
 
-export default function Home() {
+export default function Page() {
   return (
     <ToastProvider>
-      <AppContent />
+      <AuthProvider>
+        <MainApp />
+      </AuthProvider>
     </ToastProvider>
   );
 }

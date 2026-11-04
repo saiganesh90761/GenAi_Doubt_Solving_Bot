@@ -30,6 +30,7 @@ const bodySchema = z.object({
   messages: z.array(messageSchema).min(1),
   userChunks: z.array(chunkSchema).optional().default([]),
   sessionId: z.string().optional(),
+  userId: z.string().optional(),
   subject: z.string().optional(),
   documentId: z.string().optional(),
   scope: z.enum(["all", "global", "private"]).optional().default("all"),
@@ -109,7 +110,7 @@ export async function POST(request: Request) {
     return jsonError(400, "Send { messages } with a non-empty messages array.");
   }
 
-  const { messages, userChunks, sessionId, subject, documentId, scope } = parsed.data;
+  const { messages, userChunks, sessionId, userId, subject, documentId, scope } = parsed.data;
   const rawQuery = lastUserMessage(messages);
   if (!rawQuery) {
     return jsonError(400, "Please include a user message to answer.");
@@ -136,7 +137,7 @@ export async function POST(request: Request) {
   try {
     retrieved = await retrieve({
       query: effectiveQuery,
-      ownerId: sessionId || null,
+      ownerId: userId || sessionId || null,
       extraChunks: userChunks as IndexRecord[],
       k: config.rag.defaultTopK,
       subject,

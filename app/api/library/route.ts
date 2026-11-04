@@ -4,7 +4,7 @@ import { loadIndex } from "@/lib/rag";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const sessionId = searchParams.get("sessionId");
+  const sessionId = searchParams.get("sessionId") || searchParams.get("userId") || undefined;
   const rawScope = searchParams.get("scope");
   const subject = searchParams.get("subject") || undefined;
 
