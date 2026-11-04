@@ -138,8 +138,29 @@ export function AuthModal() {
 
         {/* Error Alert */}
         {errorMessage && (
-          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-            {errorMessage}
+          <div className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300 space-y-2">
+            <p className="font-medium">{errorMessage}</p>
+            {errorMessage.toLowerCase().includes("rate limit") && (
+              <div className="pt-2 border-t border-red-500/20 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setErrorMessage(null);
+                    openAuth("login");
+                  }}
+                  className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-zinc-700 transition"
+                >
+                  Try Signing In Instead →
+                </button>
+                <button
+                  type="button"
+                  onClick={closeAuth}
+                  className="text-[11px] text-zinc-400 hover:text-white underline"
+                >
+                  Continue as Guest
+                </button>
+              </div>
+            )}
           </div>
         )}
 

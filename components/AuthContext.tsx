@@ -148,6 +148,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       if (error) {
+        // If email rate limit was exceeded, check if the account was already registered and attempt immediate sign-in
+        if (error.message.toLowerCase().includes("rate limit") || error.message.toLowerCase().includes("exceeded")) {
+          try {
+            const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
+              email: cleanEmail,
+              password,
+            });
+            if (!loginErr && loginData.session?.user) {
+              setUser(buildUserFromSession(loginData.session.user));
+              setToken(loginData.session.access_token);
+              setAuthModalOpen(false);
+              return;
+            }
+          } catch {
+            // ignore and throw friendly error below
+          }
+
+          throw new Error(
+            "Supabase email rate limit exceeded (Free tier limits default verification emails to 3/hour). To fix this instantly: In your Supabase Dashboard → Authentication → Providers → Email, turn OFF 'Confirm email', then click Create Account again."
+          );
+        }
+
         throw new Error(error.message || "Registration failed.");
       }
 
