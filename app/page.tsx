@@ -113,26 +113,51 @@ function SourcesPanel({ sources }: { sources: ChatSource[] }) {
   }
 
   return (
-    <details className="group mt-3 rounded-xl border border-zinc-200 bg-zinc-50/80 open:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900/60 dark:open:bg-zinc-900">
-      <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium text-zinc-700 marker:content-none dark:text-zinc-200">
-        <span className="flex items-center justify-between gap-2">
-          Sources ({sources.length})
-          <span className="text-xs font-normal text-zinc-400 group-open:hidden">Show</span>
-          <span className="hidden text-xs font-normal text-zinc-400 group-open:inline">Hide</span>
+    <details className="group mt-3 rounded-xl border border-zinc-200 bg-zinc-50/80 text-xs dark:border-zinc-800 dark:bg-zinc-900/60">
+      <summary className="flex cursor-pointer select-none items-center justify-between px-3.5 py-2.5 font-medium text-zinc-700 dark:text-zinc-300">
+        <span className="flex items-center gap-2">
+          <span>📚</span>
+          <span>{sources.length} Academic Reference {sources.length === 1 ? "Source" : "Sources"}</span>
         </span>
+        <span className="text-xs text-zinc-400 group-open:hidden">View Sources ▾</span>
+        <span className="hidden text-xs text-zinc-400 group-open:inline">Hide ▴</span>
       </summary>
-      <ul className="space-y-2 border-t border-zinc-200 px-3 py-3 dark:border-zinc-700">
+      <ul className="space-y-2 border-t border-zinc-200/80 p-3 dark:border-zinc-800">
         {sources.map((source, index) => (
           <li
             key={`${source.file}-${source.page}-${index}`}
-            className="rounded-lg bg-white px-3 py-2 text-sm dark:bg-zinc-950"
+            className="rounded-lg border border-zinc-200/60 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-950"
           >
-            <p className="font-medium text-zinc-800 dark:text-zinc-100">
-              {source.file}{" "}
-              <span className="font-normal text-zinc-500">p. {source.page}</span>
-            </p>
-            <p className="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400">
-              {source.snippet}
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                {source.file}{" "}
+                <span className="font-normal text-zinc-500">p. {source.page}</span>
+              </p>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {source.score !== undefined && (
+                  <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+                    {Math.round(source.score * 100)}% match
+                  </span>
+                )}
+                {source.documentId && (
+                  <a
+                    href={`/api/library/${source.documentId}#page=${source.page}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium text-sky-600 hover:bg-sky-500/20 dark:text-sky-400"
+                  >
+                    Open PDF ↗
+                  </a>
+                )}
+              </div>
+            </div>
+            {source.subject && (
+              <p className="mt-0.5 text-[11px] font-medium text-zinc-400">
+                Subject: {source.subject}
+              </p>
+            )}
+            <p className="mt-1.5 text-xs leading-5 text-zinc-600 dark:text-zinc-400 border-l-2 border-zinc-200 pl-2 dark:border-zinc-800 italic">
+              &ldquo;{source.snippet}&rdquo;
             </p>
           </li>
         ))}
@@ -154,6 +179,7 @@ export default function Home() {
   const [uploadScope, setUploadScope] = useState<"private" | "global">("private");
   const [uploadSubject, setUploadSubject] = useState<string>("General Engineering");
   const [uploadStage, setUploadStage] = useState<string | null>(null);
+  const [searchScope, setSearchScope] = useState<"all" | "global" | "private">("all");
   const [sessionId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     let id = sessionStorage.getItem("engineering_doubt_session_id");
@@ -237,6 +263,7 @@ export default function Home() {
           messages: history.map(({ role, content }) => ({ role, content })),
           userChunks,
           sessionId: sessionId || undefined,
+          scope: searchScope,
         }),
       });
 
@@ -687,6 +714,20 @@ export default function Home() {
                   {error}
                 </p>
               )}
+              <div className="flex items-center justify-between px-1 text-xs text-zinc-500">
+                <div className="flex items-center gap-1.5">
+                  <span>Search Scope:</span>
+                  <select
+                    value={searchScope}
+                    onChange={(e) => setSearchScope(e.target.value as "all" | "global" | "private")}
+                    className="rounded-md border border-zinc-200 bg-white px-2 py-0.5 text-xs font-medium text-zinc-700 outline-none transition-colors dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                  >
+                    <option value="all">All Library & Personal Notes</option>
+                    <option value="global">Academic Reference Textbooks Only</option>
+                    <option value="private">My Uploaded Notes Only</option>
+                  </select>
+                </div>
+              </div>
               <div className="flex items-end gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-700 dark:bg-zinc-900">
                 <textarea
                   ref={textareaRef}

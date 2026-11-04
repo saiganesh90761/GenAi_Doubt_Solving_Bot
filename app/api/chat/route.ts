@@ -1,14 +1,17 @@
 import { APIError, RateLimitError } from "openai";
 import { z } from "zod";
 import { openrouter } from "@/lib/openrouter";
-import { retrieve } from "@/lib/rag";
+import {
+  retrieve,
+  contextualizeQuery,
+  buildAcademicContext,
+  type RetrievedChunk,
+  type ChatSource,
+} from "@/lib/rag";
 import { config } from "@/lib/config";
 import type { IndexRecord } from "@/lib/types";
 
 export const maxDuration = 60;
-
-const TUTOR_PROMPT =
-  "You are an engineering tutor. Answer step by step using the provided context. Use formulas where needed. If the context doesn't contain the answer, say so clearly, then give a short general-knowledge answer labelled as such.";
 
 const messageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -27,20 +30,10 @@ const bodySchema = z.object({
   messages: z.array(messageSchema).min(1),
   userChunks: z.array(chunkSchema).optional().default([]),
   sessionId: z.string().optional(),
+  subject: z.string().optional(),
+  documentId: z.string().optional(),
+  scope: z.enum(["all", "global", "private"]).optional().default("all"),
 });
-
-type Source = {
-  file: string;
-  page: number;
-  snippet: string;
-  score?: number;
-};
-
-function snippetFrom(text: string, max = 240): string {
-  const cleaned = text.replace(/\s+/g, " ").trim();
-  if (cleaned.length <= max) return cleaned;
-  return `${cleaned.slice(0, max).trim()}…`;
-}
 
 function lastUserMessage(
   messages: z.infer<typeof messageSchema>[],
@@ -63,23 +56,6 @@ function memoryTurns(messages: z.infer<typeof messageSchema>[]) {
     }));
 }
 
-function buildSystemPrompt(chunks: { file: string; page: number; text: string }[]) {
-  const context =
-    chunks.length === 0
-      ? "(No retrieved context.)"
-      : chunks
-          .map(
-            (chunk, index) =>
-              `[${index + 1}] ${chunk.file} (p. ${chunk.page})\n${chunk.text}`,
-          )
-          .join("\n\n");
-
-  return `${TUTOR_PROMPT}
-
-Context:
-${context}`;
-}
-
 function friendlyError(error: unknown): { status: number; message: string } {
   console.error("[Chat Route Error]:", error);
   if (error instanceof RateLimitError || (error instanceof APIError && error.status === 429)) {
@@ -94,7 +70,8 @@ function friendlyError(error: unknown): { status: number; message: string } {
     if (error.status === 401 || error.status === 403) {
       return {
         status: 502,
-        message: "The tutor could not authenticate with OpenRouter. Please check that OPENROUTER_API_KEY in .env.local is valid.",
+        message:
+          "The tutor could not authenticate with OpenRouter. Please check that OPENROUTER_API_KEY in .env.local is valid.",
       };
     }
 
@@ -132,10 +109,14 @@ export async function POST(request: Request) {
     return jsonError(400, "Send { messages } with a non-empty messages array.");
   }
 
-  const { messages, userChunks, sessionId } = parsed.data;
-  const query = lastUserMessage(messages);
-  if (!query) {
+  const { messages, userChunks, sessionId, subject, documentId, scope } = parsed.data;
+  const rawQuery = lastUserMessage(messages);
+  if (!rawQuery) {
     return jsonError(400, "Please include a user message to answer.");
+  }
+
+  if (rawQuery.length > 4000) {
+    return jsonError(400, "Your question is too long. Please shorten it to under 4,000 characters.");
   }
 
   const model = config.models.chatModel;
@@ -146,33 +127,39 @@ export async function POST(request: Request) {
     return jsonError(500, "The tutor is not configured yet (missing OPENROUTER_API_KEY).");
   }
 
-  let retrieved;
+  // 1. Contextualize query for follow-up conversational turns
+  const priorHistory = messages.slice(0, -1);
+  const effectiveQuery = await contextualizeQuery(rawQuery, priorHistory);
+
+  // 2. Retrieve relevant chunks from Qdrant Cloud (and local index / user chunks fallback)
+  let retrieved: RetrievedChunk[] = [];
   try {
     retrieved = await retrieve({
-      query,
+      query: effectiveQuery,
       ownerId: sessionId || null,
       extraChunks: userChunks as IndexRecord[],
       k: config.rag.defaultTopK,
+      subject,
+      documentId,
+      knowledgeScope: scope,
+      scoreThreshold: config.rag.similarityThreshold,
     });
   } catch (error) {
-    const { status, message } = friendlyError(error);
-    return jsonError(status, message);
+    console.warn("[Chat Route] Retrieval failed, proceeding with general fallback:", error);
   }
 
-  const sources: Source[] = retrieved.map((chunk) => ({
-    file: chunk.file,
-    page: chunk.page,
-    snippet: snippetFrom(chunk.text),
-    score: chunk.score,
-  }));
+  // 3. Construct structured academic context & citation references
+  const academicContext = buildAcademicContext(retrieved);
+  const sources: ChatSource[] = academicContext.sources;
 
+  // 4. Request streaming chat completion from OpenRouter
   let completion;
   try {
     completion = await openrouter.chat.completions.create({
       model,
       stream: true,
       messages: [
-        { role: "system", content: buildSystemPrompt(retrieved) },
+        { role: "system", content: academicContext.systemPrompt },
         ...memoryTurns(messages),
       ],
     });
@@ -181,8 +168,10 @@ export async function POST(request: Request) {
     return jsonError(status, message);
   }
 
+  // 5. Stream response via Server-Sent Events (SSE)
   const stream = new ReadableStream({
     async start(controller) {
+      // Send sources payload first so frontend renders source cards immediately
       controller.enqueue(sseChunk({ type: "sources", sources }));
 
       try {

@@ -33,5 +33,6 @@ export type ChatSource = {
   snippet: string;
   score?: number;
   subject?: string;
+  documentId?: string;
   knowledgeScope?: KnowledgeScope;
 };

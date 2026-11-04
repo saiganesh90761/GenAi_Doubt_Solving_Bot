@@ -158,6 +158,7 @@ export async function searchChunks(params: {
   ownerId?: string | null;
   knowledgeScope?: "global" | "private" | "all";
   subject?: string;
+  documentId?: string;
   collectionName?: string;
   scoreThreshold?: number;
 }): Promise<ScoredChunk[]> {
@@ -203,6 +204,13 @@ export async function searchChunks(params: {
     mustConditions.push({
       key: "subject",
       match: { value: params.subject },
+    });
+  }
+
+  if (params.documentId) {
+    mustConditions.push({
+      key: "documentId",
+      match: { value: params.documentId },
     });
   }
 
